@@ -18,12 +18,17 @@ import { PATIENT_COLORS } from './patient-theme';
 
 export default function PatientDashboard() {
   const router = useRouter();
-  const { patientName, isDeviating, homeSafe, schedule } = usePatientContext();
+  const {
+    patientName,
+    patientAge,
+    caregiverName,
+    isDeviating,
+    homeSafe,
+    schedule,
+  } = usePatientContext();
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const headerAnim = useRef(new Animated.Value(-12)).current;
-  const cardAnim = useRef(new Animated.Value(24)).current;
-  const actionAnim = useRef(new Animated.Value(18)).current;
+  const sectionAnim = useRef(new Animated.Value(20)).current;
 
   useEffect(() => {
     Animated.parallel([
@@ -32,28 +37,15 @@ export default function PatientDashboard() {
         duration: 320,
         useNativeDriver: true,
       }),
-      Animated.timing(headerAnim, {
+      Animated.timing(sectionAnim, {
         toValue: 0,
-        duration: 280,
-        useNativeDriver: true,
-      }),
-      Animated.spring(cardAnim, {
-        toValue: 0,
-        damping: 16,
-        stiffness: 130,
-        useNativeDriver: true,
-      }),
-      Animated.spring(actionAnim, {
-        toValue: 0,
-        damping: 16,
-        stiffness: 120,
-        delay: 120,
+        duration: 300,
         useNativeDriver: true,
       }),
     ]).start();
-  }, [actionAnim, cardAnim, fadeAnim, headerAnim]);
+  }, [fadeAnim, sectionAnim]);
 
-  const upcomingItems = schedule.filter((item) => item.status !== 'completed').slice(0, 2);
+  const nextTasks = schedule.filter((item) => item.status !== 'completed').slice(0, 3);
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -61,130 +53,104 @@ export default function PatientDashboard() {
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <Animated.View
             style={[
-              styles.heroPanel,
+              styles.sectionCard,
               {
-                transform: [{ translateY: headerAnim }],
+                transform: [{ translateY: sectionAnim }],
               },
             ]}>
-            <View style={styles.heroGlowTop} />
-            <View style={styles.heroGlowBottom} />
-
-            <Text style={styles.greeting}>Patient Dashboard</Text>
-            <Text style={styles.heading}>You are, {patientName} 81 year old</Text>
-            <Text style={styles.heroSubtext}>
-              {homeSafe ? 'You are home safe and on track.' : 'Your next steps are ready below.'}
+            <Text style={styles.sectionEyebrow}>Who You Are</Text>
+            <Text style={styles.identityTitle}>You are {patientName}.</Text>
+            <Text style={styles.identityBody}>
+              You are {patientAge} years old. {caregiverName} is helping you today.
             </Text>
 
-            <View style={styles.badgeRow}>
-              <View style={[styles.statusBadge, styles.safeBadge]}>
-                <View style={[styles.badgeDot, { backgroundColor: PATIENT_COLORS.green }]} />
-                <Text style={styles.safeBadgeText}>
-                  {homeSafe ? 'Home Safe' : 'Routine Active'}
-                </Text>
-              </View>
-
-              {isDeviating ? (
-                <View style={[styles.statusBadge, styles.warningBadge]}>
-                  <MaterialCommunityIcons
-                    color={PATIENT_COLORS.amber}
-                    name="alert-outline"
-                    size={18}
-                  />
-                  <Text style={styles.warningBadgeText}>Guidance Available</Text>
-                </View>
-              ) : null}
-            </View>
-          </Animated.View>
-
-          {isDeviating ? (
-            <Animated.View
-              style={[
-                styles.alertCard,
-                {
-                  transform: [{ translateY: cardAnim }],
-                },
-              ]}>
+            <View style={styles.reassurancePill}>
               <MaterialCommunityIcons
-                color={PATIENT_COLORS.amber}
-                name="map-marker-alert-outline"
-                size={24}
+                color={PATIENT_COLORS.green}
+                name="shield-check-outline"
+                size={18}
               />
-              <View style={styles.alertCopy}>
-                <Text style={styles.alertTitle}>You are off your usual route</Text>
-                <Text style={styles.alertSubtitle}>
-                  Open guidance for simple directions back home.
-                </Text>
-              </View>
-            </Animated.View>
-          ) : null}
-
-          <Animated.View
-            style={[
-              styles.currentCard,
-              {
-                transform: [{ translateY: cardAnim }],
-              },
-            ]}>
-            <Text style={styles.cardLabel}>Current Activity</Text>
-            <Text style={styles.currentTitle}>Afternoon Walk</Text>
-            <Text style={styles.currentSubtitle}>Heading toward: Central Park</Text>
-
-            <View style={styles.recentBox}>
-              <Text style={styles.recentText}>Recent stop: Grocery store at 2:05 PM</Text>
+              <Text style={styles.reassuranceText}>
+                {homeSafe ? 'You are safe at home.' : 'You are safe and following today’s plan.'}
+              </Text>
             </View>
           </Animated.View>
 
           <Animated.View
             style={[
-              styles.actionGrid,
+              styles.sectionCard,
               {
-                transform: [{ translateY: actionAnim }],
+                transform: [{ translateY: sectionAnim }],
               },
             ]}>
+            <Text style={styles.sectionEyebrow}>What To Do Next</Text>
+            <Text style={styles.tasksTitle}>These are your next tasks.</Text>
+
+            <View style={styles.taskList}>
+              {nextTasks.map((item) => (
+                <View key={item.id} style={styles.taskRow}>
+                  <View style={styles.taskTimeWrap}>
+                    <Text style={styles.taskTime}>{item.time}</Text>
+                  </View>
+
+                  <View style={styles.taskCopy}>
+                    <Text style={styles.taskText}>{item.activity}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+
             <Pressable
               accessibilityRole="button"
-              onPress={() => router.push('/patient/face-scan')}
-              style={styles.actionCard}>
-              <View style={[styles.actionIconWrap, { backgroundColor: PATIENT_COLORS.blueSoft }]}>
-                <MaterialCommunityIcons
-                  color={PATIENT_COLORS.blue}
-                  name="account-search-outline"
-                  size={30}
-                />
-              </View>
-              <Text style={styles.actionText}>Scan Familiar Face</Text>
+              onPress={() => router.push('/patient/schedule')}
+              style={styles.inlineButton}>
+              <Text style={styles.inlineButtonText}>See full schedule</Text>
             </Pressable>
+          </Animated.View>
+
+          <Animated.View
+            style={[
+              styles.sectionCard,
+              {
+                transform: [{ translateY: sectionAnim }],
+              },
+            ]}>
+            <Text style={styles.sectionEyebrow}>Need Help?</Text>
+            <Text style={styles.helpTitle}>
+              {isDeviating ? 'Let us guide you home.' : 'Choose one simple action.'}
+            </Text>
+            <Text style={styles.helpBody}>
+              {isDeviating
+                ? 'Tap the guidance button for calm, step-by-step directions.'
+                : 'Use guidance or familiar faces whenever you need support.'}
+            </Text>
 
             <Pressable
               accessibilityRole="button"
               onPress={() => router.push('/patient/guidance')}
-              style={styles.actionCard}>
-              <View style={[styles.actionIconWrap, { backgroundColor: PATIENT_COLORS.greenSoft }]}>
-                <MaterialCommunityIcons
-                  color={PATIENT_COLORS.green}
-                  name="navigation-variant-outline"
-                  size={30}
-                />
-              </View>
-              <Text style={styles.actionText}>View Guidance</Text>
+              style={styles.primaryButton}>
+              <MaterialCommunityIcons
+                color="#FFFFFF"
+                name="navigation-variant-outline"
+                size={22}
+              />
+              <Text style={styles.primaryButtonText}>
+                {isDeviating ? 'Show Directions Home' : 'Open Guidance'}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.push('/patient/face-scan')}
+              style={styles.secondaryButton}>
+              <MaterialCommunityIcons
+                color={PATIENT_COLORS.blue}
+                name="account-search-outline"
+                size={22}
+              />
+              <Text style={styles.secondaryButtonText}>See Familiar Faces</Text>
             </Pressable>
           </Animated.View>
-
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Your Schedule</Text>
-            <Pressable accessibilityRole="button" onPress={() => router.push('/patient/schedule')}>
-              <Text style={styles.sectionLink}>View all</Text>
-            </Pressable>
-          </View>
-
-          <View style={styles.scheduleList}>
-            {upcomingItems.map((item) => (
-              <View key={item.id} style={styles.scheduleCard}>
-                <Text style={styles.scheduleTime}>{item.time}</Text>
-                <Text style={styles.scheduleItem}>{item.activity}</Text>
-              </View>
-            ))}
-          </View>
         </ScrollView>
       </Animated.View>
     </SafeAreaView>
@@ -204,235 +170,156 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingBottom: 36,
   },
-  heroPanel: {
+  sectionCard: {
     backgroundColor: PATIENT_COLORS.surface,
-    borderRadius: 28,
-    padding: 24,
+    borderRadius: 24,
+    padding: 20,
     marginTop: 8,
     marginBottom: 18,
-    overflow: 'hidden',
     borderWidth: 1,
     borderColor: PATIENT_COLORS.border,
+    gap: 12,
   },
-  heroGlowTop: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    top: -80,
-    right: -40,
-    backgroundColor: 'rgba(74, 144, 217, 0.12)',
-  },
-  heroGlowBottom: {
-    position: 'absolute',
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    left: -46,
-    bottom: -90,
-    backgroundColor: 'rgba(109, 191, 138, 0.12)',
-  },
-  greeting: {
-    fontSize: 15,
-    lineHeight: 20,
+  sectionEyebrow: {
+    fontSize: 14,
+    lineHeight: 18,
     color: PATIENT_COLORS.textSecondary,
-    fontWeight: '600',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
-  heading: {
-    marginTop: 4,
-    fontSize: 30,
-    lineHeight: 36,
+  identityTitle: {
+    fontSize: 32,
+    lineHeight: 38,
     color: PATIENT_COLORS.textPrimary,
     fontWeight: '800',
     fontFamily: Fonts.rounded,
   },
-  heroSubtext: {
-    marginTop: 8,
+  identityBody: {
     fontSize: 16,
     lineHeight: 22,
     color: PATIENT_COLORS.textSecondary,
     fontWeight: '500',
-    maxWidth: 300,
   },
-  badgeRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    marginTop: 16,
-  },
-  statusBadge: {
-    minHeight: 38,
-    paddingHorizontal: 14,
-    borderRadius: 999,
+  reassurancePill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-  },
-  safeBadge: {
+    minHeight: 42,
+    paddingHorizontal: 14,
+    borderRadius: 999,
     backgroundColor: PATIENT_COLORS.greenSoft,
   },
-  warningBadge: {
-    backgroundColor: PATIENT_COLORS.amberSoft,
-  },
-  badgeDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  safeBadgeText: {
-    fontSize: 13,
-    lineHeight: 18,
+  reassuranceText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
     color: '#2F6B45',
     fontWeight: '700',
   },
-  warningBadgeText: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: '#9A6A1F',
-    fontWeight: '700',
-  },
-  alertCard: {
-    backgroundColor: PATIENT_COLORS.surface,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: '#F2D4A2',
-    padding: 18,
-    marginBottom: 18,
-    flexDirection: 'row',
-    gap: 12,
-  },
-  alertCopy: {
-    flex: 1,
-    gap: 4,
-  },
-  alertTitle: {
-    fontSize: 17,
-    lineHeight: 22,
+  tasksTitle: {
+    fontSize: 26,
+    lineHeight: 32,
     color: PATIENT_COLORS.textPrimary,
-    fontWeight: '800',
-  },
-  alertSubtitle: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: PATIENT_COLORS.textSecondary,
-    fontWeight: '500',
-  },
-  currentCard: {
-    backgroundColor: PATIENT_COLORS.surface,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: PATIENT_COLORS.border,
-    padding: 20,
-    marginBottom: 18,
-  },
-  cardLabel: {
-    fontSize: 14,
-    lineHeight: 18,
-    color: PATIENT_COLORS.textSecondary,
-    fontWeight: '700',
-  },
-  currentTitle: {
-    marginTop: 8,
-    fontSize: 28,
-    lineHeight: 34,
-    color: PATIENT_COLORS.blue,
     fontWeight: '800',
     fontFamily: Fonts.rounded,
   },
-  currentSubtitle: {
-    marginTop: 6,
+  taskList: {
+    gap: 12,
+  },
+  taskRow: {
+    borderRadius: 18,
+    backgroundColor: '#FAF8F3',
+    borderWidth: 1,
+    borderColor: PATIENT_COLORS.border,
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  taskTimeWrap: {
+    minWidth: 86,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: 14,
+    backgroundColor: PATIENT_COLORS.blueSoft,
+    alignItems: 'center',
+  },
+  taskTime: {
+    fontSize: 14,
+    lineHeight: 18,
+    color: PATIENT_COLORS.blue,
+    fontWeight: '800',
+  },
+  taskCopy: {
+    flex: 1,
+  },
+  taskText: {
+    fontSize: 17,
+    lineHeight: 20,
+    color: PATIENT_COLORS.textPrimary,
+    fontWeight: '700',
+  },
+  inlineButton: {
+    minHeight: 54,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: PATIENT_COLORS.border,
+    backgroundColor: PATIENT_COLORS.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  inlineButtonText: {
+    fontSize: 16,
+    lineHeight: 22,
+    color: PATIENT_COLORS.blue,
+    fontWeight: '800',
+  },
+  helpTitle: {
+    fontSize: 26,
+    lineHeight: 32,
+    color: PATIENT_COLORS.textPrimary,
+    fontWeight: '800',
+    fontFamily: Fonts.rounded,
+  },
+  helpBody: {
     fontSize: 16,
     lineHeight: 22,
     color: PATIENT_COLORS.textSecondary,
     fontWeight: '500',
   },
-  recentBox: {
-    marginTop: 14,
-    borderRadius: 16,
-    backgroundColor: PATIENT_COLORS.surfaceMuted,
-    padding: 14,
-  },
-  recentText: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: PATIENT_COLORS.textPrimary,
-    fontWeight: '500',
-  },
-  actionGrid: {
+  primaryButton: {
+    minHeight: 62,
+    borderRadius: 18,
+    backgroundColor: PATIENT_COLORS.blue,
     flexDirection: 'row',
-    gap: 14,
-    marginBottom: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 2,
   },
-  actionCard: {
-    flex: 1,
-    minHeight: 170,
-    borderRadius: 24,
-    backgroundColor: PATIENT_COLORS.surface,
+  primaryButtonText: {
+    fontSize: 18,
+    lineHeight: 24,
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+  secondaryButton: {
+    minHeight: 60,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: PATIENT_COLORS.border,
+    backgroundColor: PATIENT_COLORS.surfaceMuted,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 16,
-    gap: 14,
+    gap: 10,
   },
-  actionIconWrap: {
-    width: 66,
-    height: 66,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionText: {
+  secondaryButtonText: {
     fontSize: 17,
     lineHeight: 22,
-    color: PATIENT_COLORS.textPrimary,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    lineHeight: 26,
-    color: PATIENT_COLORS.textPrimary,
-    fontWeight: '800',
-    fontFamily: Fonts.rounded,
-  },
-  sectionLink: {
-    fontSize: 14,
-    lineHeight: 18,
-    color: PATIENT_COLORS.blue,
-    fontWeight: '700',
-  },
-  scheduleList: {
-    gap: 12,
-  },
-  scheduleCard: {
-    backgroundColor: PATIENT_COLORS.surface,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: PATIENT_COLORS.border,
-    padding: 16,
-    flexDirection: 'row',
-    gap: 14,
-    alignItems: 'center',
-  },
-  scheduleTime: {
-    width: 82,
-    fontSize: 15,
-    lineHeight: 20,
     color: PATIENT_COLORS.blue,
     fontWeight: '800',
-  },
-  scheduleItem: {
-    flex: 1,
-    fontSize: 15,
-    lineHeight: 20,
-    color: PATIENT_COLORS.textPrimary,
-    fontWeight: '600',
   },
 });

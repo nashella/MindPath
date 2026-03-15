@@ -19,6 +19,8 @@ export type PatientNotification = {
 
 type PatientContextValue = {
   patientName: string;
+  patientAge: number;
+  caregiverName: string;
   isDeviating: boolean;
   homeSafe: boolean;
   notifications: PatientNotification[];
@@ -69,6 +71,8 @@ const INITIAL_NOTIFICATIONS: PatientNotification[] = [
 
 export function PatientProvider({ children }: { children: React.ReactNode }) {
   const [patientName] = useState('Evelyn');
+  const [patientAge] = useState(81);
+  const [caregiverName] = useState('Deshawn');
   const [isDeviating, setIsDeviating] = useState(true);
   const [homeSafe, setHomeSafe] = useState(false);
   const [notifications, setNotifications] =
@@ -78,6 +82,8 @@ export function PatientProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<PatientContextValue>(
     () => ({
       patientName,
+      patientAge,
+      caregiverName,
       isDeviating,
       homeSafe,
       notifications,
@@ -99,7 +105,7 @@ export function PatientProvider({ children }: { children: React.ReactNode }) {
         );
       },
     }),
-    [homeSafe, isDeviating, notifications, patientName, schedule]
+    [caregiverName, homeSafe, isDeviating, notifications, patientAge, patientName, schedule]
   );
 
   return <PatientContext.Provider value={value}>{children}</PatientContext.Provider>;
