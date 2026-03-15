@@ -171,8 +171,8 @@ export default function SignupScreen() {
                   icon="account-outline"
                   label="I'm a Patient"
                   onPress={() => {
-                    setIsError(false);
-                    setStatus('Patient access is not wired yet.');
+                    resetMessages();
+                    router.push('/patient');
                   }}
                 />
 
@@ -506,3 +506,4 @@ const styles = StyleSheet.create({
     opacity: 0.75,
   },
 });
+

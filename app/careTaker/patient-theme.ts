@@ -1,0 +1,16 @@
+export const PATIENT_COLORS = {
+  background: '#F7F4EE',
+  surface: '#FFFFFF',
+  surfaceMuted: '#EFF5FC',
+  border: '#E4DDD4',
+  textPrimary: '#1A1A2E',
+  textSecondary: '#707084',
+  blue: '#4A90D9',
+  blueSoft: '#DCECF9',
+  green: '#6DBF8A',
+  greenSoft: '#E4F4EA',
+  amber: '#D29A49',
+  amberSoft: '#FFF1D9',
+  danger: '#E05C5C',
+  shadow: 'rgba(26, 26, 46, 0.08)',
+};

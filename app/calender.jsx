@@ -1,7 +1,8 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import { onAuthStateChanged } from 'firebase/auth';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -15,6 +16,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import TimePickerModal from '@/components/time-picker-modal';
 import { Fonts } from '@/constants/theme';
+import {
+  saveCalendarEvent,
+  subscribeToCalendarEvents,
+} from '@/lib/firestore-data';
+import { formatFirebaseError } from '@/lib/firebase-errors';
+import { auth } from '@/lib/firebase';
 
 const COLORS = {
   background: '#F7F9FC',
@@ -72,38 +79,12 @@ const MONTH_DAYS = [
   { day: 4, inMonth: false },
 ];
 
-const INITIAL_EVENTS_BY_DATE = {
-  2: [
-    {
-      id: 'jack-coming',
-      time: '8:00',
-      title: 'Jack coming',
-      range: '8:00 AM - 9:00 AM',
-      accent: COLORS.blue,
-    },
-  ],
-  8: [
-    {
-      id: 'med-check',
-      time: '10:00',
-      title: 'Medication check',
-      range: '10:00 AM - 10:30 AM',
-      accent: COLORS.green,
-    },
-  ],
-  17: [
-    {
-      id: 'care-team',
-      time: '2:00',
-      title: 'Care team call',
-      range: '2:00 PM - 2:30 PM',
-      accent: COLORS.green,
-    },
-  ],
-};
-
 function formatSelectedDate(day) {
   return `Mar ${day}`;
+}
+
+function buildDateKey(day) {
+  return `2026-03-${String(day).padStart(2, '0')}`;
 }
 
 function formatAgendaHeader(day) {
@@ -196,19 +177,73 @@ function buildEventRange(formattedTime) {
 export default function CalenderScreen() {
   const router = useRouter();
   const [selectedDay, setSelectedDay] = useState(2);
-  const [eventsByDate, setEventsByDate] = useState(INITIAL_EVENTS_BY_DATE);
+  const [userId, setUserId] = useState(auth.currentUser?.uid ?? null);
+  const [calendarEvents, setCalendarEvents] = useState([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isTimePickerVisible, setIsTimePickerVisible] = useState(false);
   const [taskInput, setTaskInput] = useState('');
   const [selectedTaskTime, setSelectedTaskTime] = useState('8:00 AM');
+  const [statusMessage, setStatusMessage] = useState('');
+  const [statusTone, setStatusTone] = useState('success');
+  const [isLoadingEvents, setIsLoadingEvents] = useState(true);
+  const [isSavingTask, setIsSavingTask] = useState(false);
+
+  useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      setUserId(user?.uid ?? null);
+    });
+
+    return unsubscribeAuth;
+  }, []);
+
+  useEffect(() => {
+    if (!userId) {
+      setCalendarEvents([]);
+      setIsLoadingEvents(false);
+      return undefined;
+    }
+
+    setIsLoadingEvents(true);
+
+    return subscribeToCalendarEvents(
+      userId,
+      (items) => {
+        setCalendarEvents(items);
+        setIsLoadingEvents(false);
+      },
+      (error) => {
+        console.error('Calendar Firestore load failed', error);
+        setStatusTone('error');
+        setStatusMessage(
+          formatFirebaseError(error, 'Could not load calendar events from Firestore.')
+        );
+        setIsLoadingEvents(false);
+      }
+    );
+  }, [userId]);
+
+  const eventsByDate = useMemo(() => {
+    return calendarEvents.reduce((groupedEvents, eventItem) => {
+      const nextDateKey = eventItem.dateKey ?? buildDateKey(eventItem.day);
+
+      if (!groupedEvents[nextDateKey]) {
+        groupedEvents[nextDateKey] = [];
+      }
+
+      groupedEvents[nextDateKey].push(eventItem);
+      return groupedEvents;
+    }, {});
+  }, [calendarEvents]);
 
   const agendaMeta = useMemo(() => formatAgendaHeader(selectedDay), [selectedDay]);
-  const events = eventsByDate[selectedDay] ?? [];
+  const selectedDateKey = useMemo(() => buildDateKey(selectedDay), [selectedDay]);
+  const events = eventsByDate[selectedDateKey] ?? [];
   const hasEvents = events.length > 0;
 
   const handleOpenTaskModal = () => {
     setTaskInput('');
     setSelectedTaskTime('8:00 AM');
+    setStatusMessage('');
     setIsModalVisible(true);
   };
 
@@ -218,35 +253,49 @@ export default function CalenderScreen() {
     setIsTimePickerVisible(false);
   };
 
-  const handleAddTask = () => {
+  const handleAddTask = async () => {
     const trimmedTask = taskInput.trim();
 
     if (!trimmedTask) {
+      setStatusTone('error');
+      setStatusMessage('Write a task before saving it.');
       return;
     }
 
-    setEventsByDate((currentEvents) => {
-      const dayEvents = currentEvents[selectedDay] ?? [];
-      const nextIndex = dayEvents.length;
+    if (!userId) {
+      setStatusTone('error');
+      setStatusMessage('Sign in again before adding a calendar task.');
+      return;
+    }
+
+    setIsSavingTask(true);
+
+    try {
       const eventTime = buildEventRange(selectedTaskTime);
 
-      const newEvent = {
-        id: `${selectedDay}-${Date.now()}`,
+      await saveCalendarEvent(userId, {
+        day: selectedDay,
+        dateKey: selectedDateKey,
         title: trimmedTask,
         time: eventTime.time,
         range: eventTime.range,
-        accent: getEventAccent(nextIndex),
-      };
+        formattedTime: selectedTaskTime,
+      });
 
-      return {
-        ...currentEvents,
-        [selectedDay]: [...dayEvents, newEvent],
-      };
-    });
-
-    setTaskInput('');
-    setIsModalVisible(false);
-    setIsTimePickerVisible(false);
+      setTaskInput('');
+      setIsModalVisible(false);
+      setIsTimePickerVisible(false);
+      setStatusTone('success');
+      setStatusMessage(`Task saved for ${formatSelectedDate(selectedDay)}.`);
+    } catch (error) {
+      console.error('Calendar Firestore save failed', error);
+      setStatusTone('error');
+      setStatusMessage(
+        formatFirebaseError(error, 'Could not save the calendar task.')
+      );
+    } finally {
+      setIsSavingTask(false);
+    }
   };
 
   return (
@@ -285,13 +334,8 @@ export default function CalenderScreen() {
           <View style={styles.calendarGrid}>
             {MONTH_DAYS.map((item, index) => {
               const isSelected = item.inMonth && item.day === selectedDay;
-              const hasUserEvents = item.inMonth && (eventsByDate[item.day] ?? []).length > 0;
-              const markerStyle =
-                hasUserEvents || item.marker === 'green'
-                  ? styles.greenMarker
-                  : item.marker === 'green-light'
-                    ? styles.greenLightMarker
-                    : null;
+              const hasUserEvents = item.inMonth && (eventsByDate[buildDateKey(item.day)] ?? []).length > 0;
+              const markerStyle = hasUserEvents ? styles.greenMarker : null;
 
               return (
                 <Pressable
@@ -337,11 +381,31 @@ export default function CalenderScreen() {
             </View>
 
             <View style={styles.eventsList}>
-              {hasEvents ? (
-                events.map((event) => (
+              {statusMessage ? (
+                <Text
+                  style={[
+                    styles.statusText,
+                    statusTone === 'error' && styles.statusTextError,
+                  ]}>
+                  {statusMessage}
+                </Text>
+              ) : null}
+
+              {isLoadingEvents ? (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyStateTitle}>Loading events...</Text>
+                  <Text style={styles.emptyStateText}>Reading this caregiver calendar from Firestore.</Text>
+                </View>
+              ) : hasEvents ? (
+                events.map((event, index) => (
                   <View key={event.id} style={styles.eventRow}>
                     <Text style={styles.eventTime}>{event.time}</Text>
-                    <View style={[styles.eventAccent, { backgroundColor: event.accent }]} />
+                    <View
+                      style={[
+                        styles.eventAccent,
+                        { backgroundColor: event.accent ?? getEventAccent(index) },
+                      ]}
+                    />
                     <View style={styles.eventCopy}>
                       <Text style={styles.eventTitle}>{event.title}</Text>
                       <Text style={styles.eventRange}>{event.range}</Text>
@@ -411,8 +475,12 @@ export default function CalenderScreen() {
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </Pressable>
 
-              <Pressable accessibilityRole="button" onPress={handleAddTask} style={styles.modalAddButton}>
-                <Text style={styles.modalAddText}>Add task</Text>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isSavingTask}
+                onPress={handleAddTask}
+                style={[styles.modalAddButton, isSavingTask && styles.modalAddButtonDisabled]}>
+                <Text style={styles.modalAddText}>{isSavingTask ? 'Saving...' : 'Add task'}</Text>
               </Pressable>
             </View>
           </View>
@@ -657,6 +725,15 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     maxWidth: 280,
   },
+  statusText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: COLORS.green,
+    fontWeight: '700',
+  },
+  statusTextError: {
+    color: '#E05C5C',
+  },
   bottomBar: {
     position: 'absolute',
     left: 22,
@@ -797,6 +874,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: COLORS.blue,
+  },
+  modalAddButtonDisabled: {
+    opacity: 0.72,
   },
   modalAddText: {
     fontSize: 16,

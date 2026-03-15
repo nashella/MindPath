@@ -1,7 +1,8 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import { onAuthStateChanged } from 'firebase/auth';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -14,6 +15,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import TimePickerModal from '@/components/time-picker-modal';
 import { Fonts } from '@/constants/theme';
+import {
+  saveMedicationEntry,
+  sortFormattedTimes,
+  subscribeToMedications,
+} from '@/lib/firestore-data';
+import { formatFirebaseError } from '@/lib/firebase-errors';
+import { auth } from '@/lib/firebase';
 
 const COLORS = {
   pageBackground: '#F0F4FA',
@@ -25,6 +33,7 @@ const COLORS = {
   border: '#E4EAF4',
   green: '#2FA560',
   blue: '#5899C8',
+  danger: '#E05C5C',
 };
 
 const FREQUENCY_OPTIONS = [
@@ -53,9 +62,47 @@ export default function MedicationScreen() {
   const [provider, setProvider] = useState('');
   const [frequency, setFrequency] = useState('');
   const [scheduledTimes, setScheduledTimes] = useState([]);
-  const [status, setStatus] = useState('');
-
+  const [userId, setUserId] = useState(auth.currentUser?.uid ?? null);
+  const [savedMedications, setSavedMedications] = useState([]);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [statusTone, setStatusTone] = useState('success');
+  const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingMedications, setIsLoadingMedications] = useState(true);
   const [isTimePickerVisible, setIsTimePickerVisible] = useState(false);
+
+  useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      setUserId(user?.uid ?? null);
+    });
+
+    return unsubscribeAuth;
+  }, []);
+
+  useEffect(() => {
+    if (!userId) {
+      setSavedMedications([]);
+      setIsLoadingMedications(false);
+      return undefined;
+    }
+
+    setIsLoadingMedications(true);
+
+    return subscribeToMedications(
+      userId,
+      (items) => {
+        setSavedMedications(items);
+        setIsLoadingMedications(false);
+      },
+      (error) => {
+        console.error('Medication Firestore load failed', error);
+        setStatusTone('error');
+        setStatusMessage(
+          formatFirebaseError(error, 'Could not load medications from Firestore.')
+        );
+        setIsLoadingMedications(false);
+      }
+    );
+  }, [userId]);
 
   const handleSetTime = (formattedTime) => {
     setScheduledTimes((currentTimes) => {
@@ -63,11 +110,11 @@ export default function MedicationScreen() {
         return currentTimes;
       }
 
-      return [...currentTimes, formattedTime];
+      return sortFormattedTimes([...currentTimes, formattedTime]);
     });
 
     setIsTimePickerVisible(false);
-    setStatus('');
+    setStatusMessage('');
   };
 
   const handleCancelTime = () => {
@@ -80,13 +127,51 @@ export default function MedicationScreen() {
     );
   };
 
-  const resetForm = () => {
+  const clearForm = () => {
     setMedicationName('');
     setPurpose('');
     setProvider('');
     setFrequency('');
     setScheduledTimes([]);
-    setStatus('Form cleared. Nothing was submitted.');
+  };
+
+  const handleSaveMedication = async () => {
+    if (!userId) {
+      setStatusTone('error');
+      setStatusMessage('Sign in again before saving medication.');
+      return;
+    }
+
+    if (!medicationName.trim() || !purpose.trim() || !provider.trim() || !frequency || scheduledTimes.length === 0) {
+      setStatusTone('error');
+      setStatusMessage('Complete every medication field before saving.');
+      return;
+    }
+
+    setIsSaving(true);
+    setStatusMessage('');
+
+    try {
+      await saveMedicationEntry(userId, {
+        medicationName,
+        purpose,
+        provider,
+        frequency,
+        scheduledTimes,
+      });
+
+      clearForm();
+      setStatusTone('success');
+      setStatusMessage('Medication saved to Firestore.');
+    } catch (error) {
+      console.error('Medication Firestore save failed', error);
+      setStatusTone('error');
+      setStatusMessage(
+        formatFirebaseError(error, 'Could not save medication to Firestore.')
+      );
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -206,12 +291,54 @@ export default function MedicationScreen() {
               </View>
             </FormField>
 
-            {status ? <Text style={styles.statusText}>{status}</Text> : null}
+            {statusMessage ? (
+              <Text
+                style={[
+                  styles.statusText,
+                  statusTone === 'error' && styles.statusTextError,
+                ]}>
+                {statusMessage}
+              </Text>
+            ) : null}
 
-            <Pressable accessibilityRole="button" onPress={resetForm} style={styles.saveButton}>
+            <Pressable
+              accessibilityRole="button"
+              disabled={isSaving}
+              onPress={handleSaveMedication}
+              style={[styles.saveButton, isSaving && styles.saveButtonDisabled]}>
               <MaterialCommunityIcons name="content-save-outline" size={22} color="#FFFFFF" />
-              <Text style={styles.saveButtonText}>Save</Text>
+              <Text style={styles.saveButtonText}>{isSaving ? 'Saving...' : 'Save'}</Text>
             </Pressable>
+
+            <View style={styles.savedSection}>
+              <Text style={styles.savedSectionTitle}>Saved Medications</Text>
+
+              {isLoadingMedications ? (
+                <Text style={styles.savedSectionHint}>Loading medications from Firestore...</Text>
+              ) : savedMedications.length > 0 ? (
+                savedMedications.map((savedMedication) => (
+                  <View key={savedMedication.id} style={styles.savedMedicationCard}>
+                    <View style={styles.savedMedicationHeader}>
+                      <Text style={styles.savedMedicationName}>
+                        {savedMedication.medicationName}
+                      </Text>
+                      <Text style={styles.savedMedicationFrequency}>
+                        {savedMedication.frequency}
+                      </Text>
+                    </View>
+
+                    <Text style={styles.savedMedicationMeta}>
+                      {savedMedication.purpose} · {savedMedication.provider}
+                    </Text>
+                    <Text style={styles.savedMedicationTimes}>
+                      {(savedMedication.scheduledTimes ?? []).join(', ')}
+                    </Text>
+                  </View>
+                ))
+              ) : (
+                <Text style={styles.savedSectionHint}>No medications saved yet.</Text>
+              )}
+            </View>
           </View>
         </View>
       </ScrollView>
@@ -449,6 +576,9 @@ const styles = StyleSheet.create({
     color: COLORS.green,
     fontWeight: '700',
   },
+  statusTextError: {
+    color: COLORS.danger,
+  },
   saveButton: {
     minHeight: 56,
     borderRadius: 18,
@@ -459,10 +589,69 @@ const styles = StyleSheet.create({
     gap: 10,
     marginTop: 4,
   },
+  saveButtonDisabled: {
+    opacity: 0.72,
+  },
   saveButtonText: {
     fontSize: 16,
     lineHeight: 22,
     color: '#FFFFFF',
     fontWeight: '800',
+  },
+  savedSection: {
+    marginTop: 4,
+    gap: 12,
+  },
+  savedSectionTitle: {
+    fontSize: 18,
+    lineHeight: 24,
+    color: COLORS.textPrimary,
+    fontWeight: '800',
+    fontFamily: Fonts.rounded,
+  },
+  savedSectionHint: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: COLORS.textSecondary,
+    fontWeight: '500',
+  },
+  savedMedicationCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: '#FAFBFE',
+    padding: 14,
+    gap: 6,
+  },
+  savedMedicationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  savedMedicationName: {
+    flex: 1,
+    fontSize: 16,
+    lineHeight: 22,
+    color: COLORS.textPrimary,
+    fontWeight: '800',
+  },
+  savedMedicationFrequency: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: COLORS.blue,
+    fontWeight: '700',
+  },
+  savedMedicationMeta: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: COLORS.textSecondary,
+    fontWeight: '500',
+  },
+  savedMedicationTimes: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: COLORS.green,
+    fontWeight: '700',
   },
 });

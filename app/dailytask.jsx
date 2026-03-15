@@ -1,7 +1,8 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import { onAuthStateChanged } from 'firebase/auth';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -15,6 +16,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import TimePickerModal from '@/components/time-picker-modal';
 import { Fonts } from '@/constants/theme';
+import {
+  saveDailyTask,
+  subscribeToDailyTasks,
+} from '@/lib/firestore-data';
+import { formatFirebaseError } from '@/lib/firebase-errors';
+import { auth } from '@/lib/firebase';
 
 const COLORS = {
   pageBackground: '#F0F4FA',
@@ -27,22 +34,8 @@ const COLORS = {
   green: '#2FA560',
   blue: '#5899C8',
   overlay: 'rgba(17, 24, 39, 0.32)',
+  danger: '#E05C5C',
 };
-
-const INITIAL_TASKS = [
-  {
-    id: 'morning-check',
-    title: 'Morning check-in',
-    time: '8:00 AM',
-    accent: COLORS.blue,
-  },
-  {
-    id: 'water-reminder',
-    title: 'Water reminder',
-    time: '11:30 AM',
-    accent: COLORS.green,
-  },
-];
 
 function getTaskAccent(index) {
   return index % 2 === 0 ? COLORS.blue : COLORS.green;
@@ -50,15 +43,55 @@ function getTaskAccent(index) {
 
 export default function DailyTaskScreen() {
   const router = useRouter();
-  const [tasks, setTasks] = useState(INITIAL_TASKS);
+  const [userId, setUserId] = useState(auth.currentUser?.uid ?? null);
+  const [tasks, setTasks] = useState([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isTimePickerVisible, setIsTimePickerVisible] = useState(false);
   const [taskInput, setTaskInput] = useState('');
   const [selectedTaskTime, setSelectedTaskTime] = useState('8:00 AM');
+  const [statusMessage, setStatusMessage] = useState('');
+  const [statusTone, setStatusTone] = useState('success');
+  const [isSavingTask, setIsSavingTask] = useState(false);
+  const [isLoadingTasks, setIsLoadingTasks] = useState(true);
+
+  useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      setUserId(user?.uid ?? null);
+    });
+
+    return unsubscribeAuth;
+  }, []);
+
+  useEffect(() => {
+    if (!userId) {
+      setTasks([]);
+      setIsLoadingTasks(false);
+      return undefined;
+    }
+
+    setIsLoadingTasks(true);
+
+    return subscribeToDailyTasks(
+      userId,
+      (items) => {
+        setTasks(items);
+        setIsLoadingTasks(false);
+      },
+      (error) => {
+        console.error('Daily task Firestore load failed', error);
+        setStatusTone('error');
+        setStatusMessage(
+          formatFirebaseError(error, 'Could not load daily tasks from Firestore.')
+        );
+        setIsLoadingTasks(false);
+      }
+    );
+  }, [userId]);
 
   const openAddModal = () => {
     setTaskInput('');
     setSelectedTaskTime('8:00 AM');
+    setStatusMessage('');
     setIsAddModalVisible(true);
   };
 
@@ -68,27 +101,44 @@ export default function DailyTaskScreen() {
     setIsTimePickerVisible(false);
   };
 
-  const handleAddTask = () => {
+  const handleAddTask = async () => {
     const trimmedTask = taskInput.trim();
 
     if (!trimmedTask) {
+      setStatusTone('error');
+      setStatusMessage('Write a task before saving it.');
       return;
     }
 
-    setTasks((currentTasks) => [
-      ...currentTasks,
-      {
-        id: `${Date.now()}`,
+    if (!userId) {
+      setStatusTone('error');
+      setStatusMessage('Sign in again before adding a daily task.');
+      return;
+    }
+
+    setIsSavingTask(true);
+
+    try {
+      await saveDailyTask(userId, {
         title: trimmedTask,
         time: selectedTaskTime,
-        accent: getTaskAccent(currentTasks.length),
-      },
-    ]);
+      });
 
-    setTaskInput('');
-    setSelectedTaskTime('8:00 AM');
-    setIsAddModalVisible(false);
-    setIsTimePickerVisible(false);
+      setTaskInput('');
+      setSelectedTaskTime('8:00 AM');
+      setIsAddModalVisible(false);
+      setIsTimePickerVisible(false);
+      setStatusTone('success');
+      setStatusMessage('Daily task saved to Firestore.');
+    } catch (error) {
+      console.error('Daily task Firestore save failed', error);
+      setStatusTone('error');
+      setStatusMessage(
+        formatFirebaseError(error, 'Could not save the daily task.')
+      );
+    } finally {
+      setIsSavingTask(false);
+    }
   };
 
   return (
@@ -127,15 +177,42 @@ export default function DailyTaskScreen() {
             </View>
 
             <View style={styles.taskList}>
-              {tasks.map((task) => (
-                <View key={task.id} style={styles.taskCard}>
-                  <View style={[styles.taskAccent, { backgroundColor: task.accent }]} />
-                  <View style={styles.taskCopy}>
-                    <Text style={styles.taskTime}>{task.time}</Text>
-                    <Text style={styles.taskTitle}>{task.title}</Text>
-                  </View>
+              {statusMessage ? (
+                <Text
+                  style={[
+                    styles.statusText,
+                    statusTone === 'error' && styles.statusTextError,
+                  ]}>
+                  {statusMessage}
+                </Text>
+              ) : null}
+
+              {isLoadingTasks ? (
+                <View style={styles.emptyCard}>
+                  <Text style={styles.emptyTitle}>Loading tasks...</Text>
+                  <Text style={styles.emptyText}>Reading daily tasks from Firestore.</Text>
                 </View>
-              ))}
+              ) : tasks.length > 0 ? (
+                tasks.map((task, index) => (
+                  <View key={task.id} style={styles.taskCard}>
+                    <View
+                      style={[
+                        styles.taskAccent,
+                        { backgroundColor: task.accent ?? getTaskAccent(index) },
+                      ]}
+                    />
+                    <View style={styles.taskCopy}>
+                      <Text style={styles.taskTime}>{task.time}</Text>
+                      <Text style={styles.taskTitle}>{task.title}</Text>
+                    </View>
+                  </View>
+                ))
+              ) : (
+                <View style={styles.emptyCard}>
+                  <Text style={styles.emptyTitle}>No daily tasks yet</Text>
+                  <Text style={styles.emptyText}>Use the plus button to add the first task for this caregiver.</Text>
+                </View>
+              )}
             </View>
           </View>
         </ScrollView>
@@ -188,8 +265,12 @@ export default function DailyTaskScreen() {
                 <Text style={styles.modalCancelText}>Cancel</Text>
               </Pressable>
 
-              <Pressable accessibilityRole="button" onPress={handleAddTask} style={styles.modalAddButton}>
-                <Text style={styles.modalAddText}>Add task</Text>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isSavingTask}
+                onPress={handleAddTask}
+                style={[styles.modalAddButton, isSavingTask && styles.modalAddButtonDisabled]}>
+                <Text style={styles.modalAddText}>{isSavingTask ? 'Saving...' : 'Add task'}</Text>
               </Pressable>
             </View>
           </View>
@@ -345,6 +426,26 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 4,
   },
+  emptyCard: {
+    backgroundColor: COLORS.cardBackground,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: 18,
+    gap: 6,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    lineHeight: 24,
+    color: COLORS.textPrimary,
+    fontWeight: '700',
+  },
+  emptyText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: COLORS.textSecondary,
+    fontWeight: '500',
+  },
   taskAccent: {
     width: 6,
     height: 44,
@@ -366,6 +467,15 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     color: COLORS.textPrimary,
     fontWeight: '700',
+  },
+  statusText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: COLORS.green,
+    fontWeight: '700',
+  },
+  statusTextError: {
+    color: COLORS.danger,
   },
   bottomBar: {
     position: 'absolute',
@@ -501,6 +611,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: COLORS.blue,
+  },
+  modalAddButtonDisabled: {
+    opacity: 0.72,
   },
   modalAddText: {
     fontSize: 16,
