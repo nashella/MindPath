@@ -1,3 +1,5 @@
+import AntDesign from '@expo/vector-icons/AntDesign';
+import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 import BottomSheet, { BottomSheetScrollView, TouchableOpacity as SheetButton } from '@gorhom/bottom-sheet';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { StatusBar } from 'expo-status-bar';
@@ -33,7 +35,6 @@ const COLORS = {
   danger: '#E05C5C',
   dangerSoft: '#FDECEC',
   mapBackdrop: '#EBF4FC',
-  patientPin: '#B786F7',
 };
 
 const SAFE_ZONE_RADIUS_METERS = 50;
@@ -234,8 +235,20 @@ export default function SafeZonesScreen() {
         {MapViewComponent && MarkerComponent ? (
           <MapViewComponent ref={mapRef} initialRegion={initialRegion} maxZoomLevel={21} minZoomLevel={2} onMapReady={() => setIsMapReady(true)} onPress={handleMapPress} pitchEnabled rotateEnabled scrollEnabled zoomEnabled zoomTapEnabled provider={GoogleMapProvider} style={styles.map}>
             {patientCoordinate && CircleComponent ? <CircleComponent center={patientCoordinate} fillColor={trackingState.backgroundColor} radius={patientAccuracyRadius} strokeColor={trackingState.color} strokeWidth={2} /> : null}
-            {activeZoneCenter ? <MarkerComponent coordinate={activeZoneCenter} title={isPlacingZone ? 'Home pin' : safeZoneRecord?.label || 'Home pin'} pinColor={isPlacingZone ? COLORS.blue : COLORS.green} /> : null}
-            {patientCoordinate ? <MarkerComponent coordinate={patientCoordinate} title={patientRecord?.patientName || 'Patient'} pinColor={COLORS.patientPin} /> : null}
+            {activeZoneCenter ? (
+              <MarkerComponent coordinate={activeZoneCenter} title={isPlacingZone ? 'Home pin' : safeZoneRecord?.label || 'Home pin'}>
+                <View style={[styles.mapMarker, styles.homeMarker]}>
+                  <AntDesign color="#000000" name="home" size={24} />
+                </View>
+              </MarkerComponent>
+            ) : null}
+            {patientCoordinate ? (
+              <MarkerComponent coordinate={patientCoordinate} title={patientRecord?.patientName || 'Patient'}>
+                <View style={[styles.mapMarker, styles.patientMarker]}>
+                  <FontAwesome6 color="#000000" name="person-dress" size={24} />
+                </View>
+              </MarkerComponent>
+            ) : null}
           </MapViewComponent>
         ) : (
           <View style={styles.mapFallback}>
@@ -320,6 +333,26 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.mapBackdrop },
   mapLayer: { ...StyleSheet.absoluteFillObject, backgroundColor: COLORS.mapBackdrop },
   map: { flex: 1 },
+  mapMarker: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: COLORS.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    shadowColor: COLORS.title,
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  homeMarker: {
+    borderColor: COLORS.green,
+  },
+  patientMarker: {
+    borderColor: COLORS.purple,
+  },
   mapFallback: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 12 },
   mapFallbackTitle: { fontSize: 22, color: COLORS.title, fontWeight: '700', fontFamily: Fonts.rounded },
   mapFallbackText: { fontSize: 15, color: COLORS.subtitle, textAlign: 'center', lineHeight: 22 },

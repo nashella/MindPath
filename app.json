@@ -3,6 +3,12 @@
     "name": "MindPath",
     "slug": "mindpathapp",
     "scheme": "com.deshawn54.mindpathapp",
+    // "icon": "../assets/mainicon.jpeg",
+    "splash": {
+      // "image": "../assets/splash.jpeg",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
     "plugins": [
       [
         "expo-image-picker",

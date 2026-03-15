@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
   Pressable,
   ScrollView,
@@ -19,12 +20,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Fonts } from '@/constants/theme';
 import {
+  deletePatientMemory,
   savePatientMemory,
   subscribeToPatient,
   subscribeToPatientMemories,
+  updatePatientMemory,
 } from '@/lib/firestore-data';
 import { formatFirebaseError } from '@/lib/firebase-errors';
-import { uploadMemoryPhoto } from '@/lib/storage-data';
+import { deleteStorageFile, uploadMemoryPhoto } from '@/lib/storage-data';
 import { useLinkedAccount } from '@/lib/use-linked-account';
 
 type MemoryRecord = {
@@ -34,6 +37,7 @@ type MemoryRecord = {
   description?: string;
   narration?: string;
   imageUrl?: string;
+  imagePath?: string;
   createdAtMs?: number;
 };
 
@@ -123,6 +127,7 @@ export default function MemoriesScreen() {
   const [isMemoriesLoading, setIsMemoriesLoading] = useState(true);
   const [isComposerVisible, setIsComposerVisible] = useState(false);
   const [selectedMemory, setSelectedMemory] = useState<MemoryRecord | null>(null);
+  const [editingMemory, setEditingMemory] = useState<MemoryRecord | null>(null);
   
   const [memoryTitle, setMemoryTitle] = useState('');
   const [memoryRelationship, setMemoryRelationship] = useState('');
@@ -132,6 +137,7 @@ export default function MemoriesScreen() {
   const [statusTone, setStatusTone] = useState<'success' | 'error'>('success');
   const [isPickingImage, setIsPickingImage] = useState(false);
   const [isSavingMemory, setIsSavingMemory] = useState(false);
+  const [isDeletingMemory, setIsDeletingMemory] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
 
   useEffect(() => {
@@ -186,6 +192,7 @@ export default function MemoriesScreen() {
     () => buildNarration({ title: memoryTitle, relationship: memoryRelationship, description: memoryDescription }),
     [memoryDescription, memoryRelationship, memoryTitle]
   );
+  const isEditingMemory = Boolean(editingMemory);
 
   const selectedNarration = useMemo(() => {
     return selectedMemory ? buildNarration(selectedMemory) : '';
@@ -202,10 +209,32 @@ export default function MemoriesScreen() {
 
   const handleCloseComposer = () => {
     setIsComposerVisible(false);
+    setEditingMemory(null);
     setMemoryTitle('');
     setMemoryRelationship('');
     setMemoryDescription('');
     setSelectedImageUri('');
+  };
+
+  const handleOpenComposer = () => {
+    setEditingMemory(null);
+    setMemoryTitle('');
+    setMemoryRelationship('');
+    setMemoryDescription('');
+    setSelectedImageUri('');
+    setIsComposerVisible(true);
+  };
+
+  const handleStartEditingMemory = (memory: MemoryRecord) => {
+    Speech.stop();
+    setIsSpeaking(false);
+    setSelectedMemory(null);
+    setEditingMemory(memory);
+    setMemoryTitle(memory.title ?? '');
+    setMemoryRelationship(memory.relationship ?? '');
+    setMemoryDescription(memory.description ?? '');
+    setSelectedImageUri(memory.imageUrl ?? '');
+    setIsComposerVisible(true);
   };
 
   const handlePickImage = async () => {
@@ -227,7 +256,7 @@ export default function MemoriesScreen() {
       setSelectedImageUri(result.assets[0].uri);
       setStatusTone('success');
       setStatusMessage('Photo selected for this memory.');
-    } catch (error) {
+    } catch {
       setStatusTone('error');
       setStatusMessage('Could not open the photo library.');
     } finally {
@@ -245,17 +274,50 @@ export default function MemoriesScreen() {
 
     setIsSavingMemory(true);
     try {
-      const uploadedPhoto = await uploadMemoryPhoto({ patientId, userId, uri: selectedImageUri });
-      await savePatientMemory(patientId, userId, {
+      let nextImageUrl = editingMemory?.imageUrl?.trim() ?? '';
+      let nextImagePath = editingMemory?.imagePath?.trim() ?? '';
+      const hasNewLocalImage =
+        selectedImageUri && !/^https?:\/\//i.test(selectedImageUri);
+
+      if (hasNewLocalImage) {
+        const uploadedPhoto = await uploadMemoryPhoto({
+          patientId,
+          userId,
+          uri: selectedImageUri,
+        });
+        nextImageUrl = uploadedPhoto.imageUrl;
+        nextImagePath = uploadedPhoto.imagePath;
+      }
+
+      const payload = {
         title: memoryTitle,
         relationship: memoryRelationship,
         description: memoryDescription,
         narration: draftNarration,
-        ...uploadedPhoto,
-      });
+        imageUrl: nextImageUrl,
+        imagePath: nextImagePath,
+      };
+
+      if (editingMemory) {
+        await updatePatientMemory(editingMemory.id, userId, payload);
+
+        if (
+          hasNewLocalImage &&
+          editingMemory.imagePath &&
+          editingMemory.imagePath !== nextImagePath
+        ) {
+          await deleteStorageFile(editingMemory.imagePath);
+        }
+      } else {
+        await savePatientMemory(patientId, userId, payload);
+      }
 
       setStatusTone('success');
-      setStatusMessage('Memory added to the shared album.');
+      setStatusMessage(
+        editingMemory
+          ? 'Memory updated in the shared album.'
+          : 'Memory added to the shared album.'
+      );
       handleCloseComposer();
     } catch (error) {
       setStatusTone('error');
@@ -269,6 +331,47 @@ export default function MemoriesScreen() {
     Speech.stop();
     setIsSpeaking(false);
     setSelectedMemory(null);
+  };
+
+  const handleDeleteMemory = () => {
+    if (!selectedMemory || !isCaregiver || isDeletingMemory) {
+      return;
+    }
+
+    Alert.alert(
+      'Delete memory?',
+      'This will remove the photo and its information from the shared album.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setIsDeletingMemory(true);
+              try {
+                await deletePatientMemory(selectedMemory.id);
+
+                if (selectedMemory.imagePath) {
+                  await deleteStorageFile(selectedMemory.imagePath);
+                }
+
+                setStatusTone('success');
+                setStatusMessage('Memory deleted from the shared album.');
+                handleCloseViewer();
+              } catch (error) {
+                setStatusTone('error');
+                setStatusMessage(
+                  formatFirebaseError(error, 'Could not delete this memory.')
+                );
+              } finally {
+                setIsDeletingMemory(false);
+              }
+            })();
+          },
+        },
+      ]
+    );
   };
 
   const handleSpeak = () => {
@@ -350,14 +453,27 @@ export default function MemoriesScreen() {
                 key={memory.id}
                 onPress={() => setSelectedMemory(memory)}
                 style={[styles.tile, { width: tileWidth }]}>
-                
-                {memory.imageUrl ? (
-                  <Image contentFit="cover" source={{ uri: memory.imageUrl }} style={{ width: '100%', height: tileHeight }} />
-                ) : (
-                  <View style={[styles.tilePlaceholder, { height: tileHeight }]}>
-                    <MaterialCommunityIcons color={COLORS.pink} name="image-outline" size={32} />
-                  </View>
-                )}
+                <View style={styles.tileImageWrap}>
+                  {memory.imageUrl ? (
+                    <Image contentFit="cover" source={{ uri: memory.imageUrl }} style={{ width: '100%', height: tileHeight }} />
+                  ) : (
+                    <View style={[styles.tilePlaceholder, { height: tileHeight }]}>
+                      <MaterialCommunityIcons color={COLORS.pink} name="image-outline" size={32} />
+                    </View>
+                  )}
+
+                  {isCaregiver ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={(event) => {
+                        event.stopPropagation?.();
+                        handleStartEditingMemory(memory);
+                      }}
+                      style={styles.tileEditButton}>
+                      <MaterialCommunityIcons color={COLORS.blue} name="pencil-outline" size={18} />
+                    </Pressable>
+                  ) : null}
+                </View>
                 
                 <View style={styles.tileTextWrap}>
                   <Text numberOfLines={1} style={styles.tileTitle}>
@@ -366,6 +482,9 @@ export default function MemoriesScreen() {
                   <Text numberOfLines={1} style={styles.tileMeta}>
                     {memory.relationship?.trim() || formatMemoryDate(memory.createdAtMs)}
                   </Text>
+                  {isCaregiver ? (
+                    <Text style={styles.tileActionHint}>Tap pencil to edit</Text>
+                  ) : null}
                 </View>
               </Pressable>
             ))}
@@ -385,7 +504,7 @@ export default function MemoriesScreen() {
       {isCaregiver && (
         <Pressable
           accessibilityRole="button"
-          onPress={() => setIsComposerVisible(true)}
+          onPress={handleOpenComposer}
           style={styles.floatingButton}>
           <MaterialCommunityIcons color={COLORS.white} name="plus" size={32} />
         </Pressable>
@@ -396,9 +515,11 @@ export default function MemoriesScreen() {
         <View style={styles.modalOverlay}>
           <ScrollView bounces={false} contentContainerStyle={styles.modalContent} showsVerticalScrollIndicator={false}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Add a Memory</Text>
+              <Text style={styles.modalTitle}>{isEditingMemory ? 'Edit Memory' : 'Add a Memory'}</Text>
               <Text style={styles.modalSubtitle}>
-                Add who is in the photo, their relationship, and what is happening.
+                {isEditingMemory
+                  ? 'Update the photo, relationship, and story for this memory.'
+                  : 'Add who is in the photo, their relationship, and what is happening.'}
               </Text>
 
               <View style={styles.modalForm}>
@@ -413,7 +534,7 @@ export default function MemoriesScreen() {
                     <View style={styles.pickerEmpty}>
                       <MaterialCommunityIcons color={COLORS.pink} name="camera-plus" size={32} />
                       <Text style={styles.pickerTitle}>
-                        {isPickingImage ? 'Opening photos...' : 'Upload image'}
+                        {isPickingImage ? 'Opening photos...' : isEditingMemory ? 'Change image' : 'Upload image'}
                       </Text>
                     </View>
                   )}
@@ -459,7 +580,7 @@ export default function MemoriesScreen() {
                   disabled={isSavingMemory}
                   onPress={handleSaveMemory}
                   style={[styles.primaryButton, isSavingMemory && styles.buttonDisabled]}>
-                  <Text style={styles.primaryButtonText}>{isSavingMemory ? 'Saving...' : 'Save memory'}</Text>
+                  <Text style={styles.primaryButtonText}>{isSavingMemory ? 'Saving...' : isEditingMemory ? 'Update memory' : 'Save memory'}</Text>
                 </Pressable>
               </View>
             </View>
@@ -473,6 +594,32 @@ export default function MemoriesScreen() {
           <StatusBar style="dark" />
           
           <View style={styles.viewerTopRow}>
+            {isCaregiver && selectedMemory ? (
+              <View style={styles.viewerActionRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isDeletingMemory}
+                  onPress={() => handleStartEditingMemory(selectedMemory)}
+                  style={styles.viewerGhostButton}>
+                  <MaterialCommunityIcons color={COLORS.blue} name="pencil-outline" size={20} />
+                  <Text style={styles.viewerGhostButtonText}>Edit</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isDeletingMemory}
+                  onPress={handleDeleteMemory}
+                  style={[styles.viewerGhostButton, styles.viewerGhostButtonDanger]}>
+                  {isDeletingMemory ? (
+                    <ActivityIndicator color={COLORS.danger} size="small" />
+                  ) : (
+                    <>
+                      <MaterialCommunityIcons color={COLORS.danger} name="trash-can-outline" size={20} />
+                      <Text style={styles.viewerGhostButtonDangerText}>Delete</Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
+            ) : null}
             <Pressable accessibilityRole="button" onPress={handleCloseViewer} style={styles.viewerCloseButton}>
               <MaterialCommunityIcons color={COLORS.title} name="close" size={28} />
             </Pressable>
@@ -656,10 +803,29 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     elevation: 3,
   },
+  tileImageWrap: {
+    position: 'relative',
+  },
   tilePlaceholder: {
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: COLORS.pinkSoft,
+  },
+  tileEditButton: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: COLORS.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: COLORS.title,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
+    elevation: 4,
   },
   tileTextWrap: {
     padding: 16,
@@ -674,6 +840,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     color: COLORS.subtitle,
+  },
+  tileActionHint: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.blue,
+    marginTop: 2,
   },
 
   // Floating Action Button
@@ -833,9 +1005,39 @@ const styles = StyleSheet.create({
   },
   viewerTopRow: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 24,
     paddingBottom: 8,
+  },
+  viewerActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flexShrink: 1,
+  },
+  viewerGhostButton: {
+    minHeight: 48,
+    borderRadius: 999,
+    backgroundColor: COLORS.blueSoft,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  viewerGhostButtonDanger: {
+    backgroundColor: COLORS.dangerSoft,
+  },
+  viewerGhostButtonText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.blue,
+  },
+  viewerGhostButtonDangerText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.danger,
   },
   viewerCloseButton: {
     width: 56,

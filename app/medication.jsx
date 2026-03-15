@@ -20,6 +20,7 @@ import {
   saveMedicationEntry,
   sortFormattedTimes,
   subscribeToMedications,
+  updateMedicationImage,
 } from '@/lib/firestore-data';
 import { formatFirebaseError } from '@/lib/firebase-errors';
 import { uploadMedicationPhoto } from '@/lib/storage-data';
@@ -192,31 +193,38 @@ export default function MedicationScreen() {
     setStatusMessage('');
 
     try {
-      let uploadedPhoto = {
-        imagePath: '',
-        imageUrl: '',
-      };
-
-      if (photoUri) {
-        uploadedPhoto = await uploadMedicationPhoto({
-          patientId,
-          userId,
-          uri: photoUri,
-        });
-      }
-
-      await saveMedicationEntry(patientId, userId, {
+      const pendingPhotoUri = photoUri;
+      const medicationRef = await saveMedicationEntry(patientId, userId, {
         medicationName,
         purpose,
         provider,
         frequency,
         scheduledTimes,
-        ...uploadedPhoto,
       });
 
       clearForm();
       setStatusTone('success');
-      setStatusMessage('Medication saved.');
+
+      if (pendingPhotoUri) {
+        setStatusMessage('Medication saved. Uploading photo...');
+
+        try {
+          const uploadedPhoto = await uploadMedicationPhoto({
+            patientId,
+            userId,
+            uri: pendingPhotoUri,
+          });
+
+          await updateMedicationImage(patientId, medicationRef.id, userId, uploadedPhoto);
+          setStatusMessage('Medication saved.');
+        } catch (photoError) {
+          console.error('Medication photo upload failed', photoError);
+          setStatusTone('error');
+          setStatusMessage('Medication saved, but the photo upload failed.');
+        }
+      } else {
+        setStatusMessage('Medication saved.');
+      }
     } catch (error) {
       console.error('Medication Firestore save failed', error);
       setStatusTone('error');

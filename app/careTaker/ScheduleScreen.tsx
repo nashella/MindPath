@@ -1,6 +1,6 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { useRouter } from 'expo-router';
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Pressable,
@@ -16,11 +16,75 @@ import { Fonts } from '@/constants/theme';
 import { usePatientContext } from './patient-context';
 import { PATIENT_COLORS } from './patient-theme';
 
+type CalendarEventRecord = {
+  id: string;
+  title?: string;
+  time?: string;
+  range?: string;
+  dateKey?: string;
+  timeSortValue?: number;
+};
+
+type CalendarDay = {
+  date: Date;
+  inMonth: boolean;
+};
+
+const WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+function getMonthLabel(date: Date) {
+  return new Intl.DateTimeFormat('en-US', { month: 'short' })
+    .format(date)
+    .toUpperCase();
+}
+
+function getDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function buildMonthGrid(anchorDate: Date) {
+  const monthStart = new Date(anchorDate.getFullYear(), anchorDate.getMonth(), 1);
+  const monthEnd = new Date(anchorDate.getFullYear(), anchorDate.getMonth() + 1, 0);
+  const gridStart = new Date(monthStart);
+  gridStart.setDate(monthStart.getDate() - monthStart.getDay());
+  const gridEnd = new Date(monthEnd);
+  gridEnd.setDate(monthEnd.getDate() + (6 - monthEnd.getDay()));
+  const days: CalendarDay[] = [];
+  const cursor = new Date(gridStart);
+
+  while (cursor <= gridEnd) {
+    days.push({
+      date: new Date(cursor),
+      inMonth: cursor.getMonth() === anchorDate.getMonth(),
+    });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return days;
+}
+
+function formatAgendaHeader(date: Date) {
+  return {
+    weekday: new Intl.DateTimeFormat('en-US', { weekday: 'short' })
+      .format(date)
+      .toUpperCase(),
+    day: String(date.getDate()),
+  };
+}
+
+function getEventAccent(index: number) {
+  return index % 2 === 0 ? PATIENT_COLORS.blue : PATIENT_COLORS.green;
+}
+
 export default function ScheduleScreen() {
   const router = useRouter();
-  const { schedule, updateScheduleItem } = usePatientContext();
-
+  const { calendarEvents } = usePatientContext();
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const anchorDate = useMemo(() => new Date(), []);
+  const [selectedDate, setSelectedDate] = useState(anchorDate);
 
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -30,122 +94,151 @@ export default function ScheduleScreen() {
     }).start();
   }, [fadeAnim]);
 
-  const getStatusIcon = (status: 'completed' | 'current' | 'upcoming') => {
-    if (status === 'completed') {
-      return 'check-circle';
-    }
+  const monthGrid = useMemo(() => buildMonthGrid(anchorDate), [anchorDate]);
+  const eventsByDate = useMemo(() => {
+    return calendarEvents.reduce<Record<string, CalendarEventRecord[]>>(
+      (groupedEvents, eventItem) => {
+        const dateKey = String(eventItem.dateKey ?? '').trim();
 
-    if (status === 'current') {
-      return 'clock-outline';
-    }
+        if (!dateKey) {
+          return groupedEvents;
+        }
 
-    return 'circle-outline';
-  };
+        if (!groupedEvents[dateKey]) {
+          groupedEvents[dateKey] = [];
+        }
 
-  const getStatusColor = (status: 'completed' | 'current' | 'upcoming') => {
-    if (status === 'completed') {
-      return PATIENT_COLORS.green;
-    }
+        groupedEvents[dateKey].push(eventItem);
+        groupedEvents[dateKey].sort(
+          (leftItem, rightItem) =>
+            Number(leftItem.timeSortValue ?? 0) - Number(rightItem.timeSortValue ?? 0)
+        );
+        return groupedEvents;
+      },
+      {}
+    );
+  }, [calendarEvents]);
 
-    if (status === 'current') {
-      return PATIENT_COLORS.blue;
-    }
-
-    return PATIENT_COLORS.textSecondary;
-  };
+  const selectedDateKey = useMemo(() => getDateKey(selectedDate), [selectedDate]);
+  const selectedEvents = eventsByDate[selectedDateKey] ?? [];
+  const agendaMeta = useMemo(() => formatAgendaHeader(selectedDate), [selectedDate]);
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <View style={styles.header}>
-            <Pressable accessibilityRole="button" onPress={() => router.push('/')}>
+            <Pressable accessibilityRole="button" onPress={() => router.push('/patient')}>
               <MaterialCommunityIcons
                 color={PATIENT_COLORS.blue}
                 name="arrow-left"
                 size={24}
               />
             </Pressable>
-            <Text style={styles.headerTitle}>Today&apos;s Schedule</Text>
+            <View style={styles.headerCopy}>
+              <Text style={styles.headerTitle}>Monthly Schedule</Text>
+              <Text style={styles.headerSubtitle}>
+                View the events your caregiver added for this month.
+              </Text>
+            </View>
           </View>
 
-          <View style={styles.legend}>
-            {[
-              { label: 'Done', status: 'completed' as const },
-              { label: 'Now', status: 'current' as const },
-              { label: 'Later', status: 'upcoming' as const },
-            ].map((item) => (
-              <View key={item.label} style={styles.legendItem}>
-                <MaterialCommunityIcons
-                  color={getStatusColor(item.status)}
-                  name={getStatusIcon(item.status)}
-                  size={16}
-                />
-                <Text style={styles.legendText}>{item.label}</Text>
-              </View>
+          <Text style={styles.monthTitle}>{getMonthLabel(anchorDate)}</Text>
+
+          <View style={styles.weekRow}>
+            {WEEKDAYS.map((dayLabel) => (
+              <Text key={dayLabel} style={styles.weekdayText}>
+                {dayLabel}
+              </Text>
             ))}
           </View>
 
-          {schedule.map((item) => (
-            <View
-              key={item.id}
-              style={[
-                styles.card,
-                item.status === 'current' && styles.currentCard,
-              ]}>
-              <Pressable
-                accessibilityRole="button"
-                disabled={item.status === 'completed'}
-                onPress={() => updateScheduleItem(item.id, { status: 'completed' })}
-                style={styles.statusButton}>
-                <MaterialCommunityIcons
-                  color={getStatusColor(item.status)}
-                  name={getStatusIcon(item.status)}
-                  size={22}
-                />
-              </Pressable>
+          <View style={styles.calendarGrid}>
+            {monthGrid.map((item) => {
+              const dateKey = getDateKey(item.date);
+              const hasEvents = (eventsByDate[dateKey] ?? []).length > 0;
+              const isSelected = dateKey === selectedDateKey;
+              const isToday = dateKey === getDateKey(new Date());
 
-              <View style={styles.itemContent}>
-                <Text
-                  style={[
-                    styles.activityText,
-                    item.status === 'completed' && styles.completedActivityText,
-                  ]}>
-                  {item.activity}
-                </Text>
-                <Text style={styles.timeText}>{item.time}</Text>
-                <View style={styles.metaRow}>
-                  <Text style={styles.sourceText}>
-                    {item.source === 'medication' ? 'Medication' : 'Daily task'}
-                  </Text>
-                  {item.urgent ? (
-                    <View style={styles.urgentBadge}>
-                      <MaterialCommunityIcons
-                        color="#A04B1A"
-                        name="alert-circle-outline"
-                        size={14}
-                      />
-                      <Text style={styles.urgentText}>Urgent</Text>
-                    </View>
-                  ) : null}
-                </View>
-                {item.note ? <Text style={styles.noteText}>{item.note}</Text> : null}
+              return (
+                <Pressable
+                  key={dateKey}
+                  accessibilityRole="button"
+                  onPress={() => {
+                    if (item.inMonth) {
+                      setSelectedDate(item.date);
+                    }
+                  }}
+                  style={[styles.dateCell, isSelected && styles.selectedDateCell]}>
+                  <View style={[styles.dateBubble, isToday && styles.todayBubble]}>
+                    <Text
+                      style={[
+                        styles.dateText,
+                        !item.inMonth && styles.outsideMonthText,
+                        isToday && styles.todayText,
+                      ]}>
+                      {item.date.getDate()}
+                    </Text>
+                  </View>
+
+                  {hasEvents ? <View style={styles.eventMarker} /> : null}
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <View
+            style={[
+              styles.agendaPanel,
+              selectedEvents.length > 0 && styles.agendaPanelActive,
+            ]}>
+            <View style={styles.agendaHeader}>
+              <View style={styles.agendaHeaderCopy}>
+                <Text style={styles.agendaDayNumber}>{agendaMeta.day}</Text>
+                <Text style={styles.agendaDayLabel}>{agendaMeta.weekday}</Text>
               </View>
 
-              {item.status !== 'completed' ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => updateScheduleItem(item.id, { status: 'completed' })}
-                  style={styles.completeButton}>
-                  <MaterialCommunityIcons
-                    color={PATIENT_COLORS.blue}
-                    name="check"
-                    size={16}
-                  />
-                </Pressable>
-              ) : null}
+              <View style={styles.readOnlyBadge}>
+                <MaterialCommunityIcons
+                  color={PATIENT_COLORS.green}
+                  name="eye-outline"
+                  size={18}
+                />
+                <Text style={styles.readOnlyText}>Read Only</Text>
+              </View>
             </View>
-          ))}
+
+            <View style={styles.eventsList}>
+              {selectedEvents.length ? (
+                selectedEvents.map((event, index) => (
+                  <View key={event.id} style={styles.eventRow}>
+                    <Text style={styles.eventTime}>{event.time ?? 'All day'}</Text>
+                    <View
+                      style={[
+                        styles.eventAccent,
+                        { backgroundColor: getEventAccent(index) },
+                      ]}
+                    />
+                    <View style={styles.eventCopy}>
+                      <Text style={styles.eventTitle}>
+                        {event.title?.trim() || 'Calendar event'}
+                      </Text>
+                      <Text style={styles.eventRange}>
+                        {event.range?.trim() || 'Scheduled by your caregiver'}
+                      </Text>
+                    </View>
+                  </View>
+                ))
+              ) : (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyStateTitle}>Nothing set for this day</Text>
+                  <Text style={styles.emptyStateText}>
+                    Tap another date to view the events your caregiver added.
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
         </ScrollView>
       </Animated.View>
     </SafeAreaView>
@@ -168,9 +261,13 @@ const styles = StyleSheet.create({
   },
   header: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 12,
     marginBottom: 20,
+  },
+  headerCopy: {
+    flex: 1,
+    gap: 4,
   },
   headerTitle: {
     fontSize: 28,
@@ -179,106 +276,190 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontFamily: Fonts.rounded,
   },
-  legend: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
+  headerSubtitle: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: PATIENT_COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  monthTitle: {
+    fontSize: 34,
+    lineHeight: 40,
+    color: PATIENT_COLORS.textPrimary,
+    fontWeight: '800',
+    fontFamily: Fonts.rounded,
     marginBottom: 18,
   },
-  legendItem: {
+  weekRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: PATIENT_COLORS.surface,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: PATIENT_COLORS.border,
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    paddingHorizontal: 4,
   },
-  legendText: {
+  weekdayText: {
+    width: '14.28%',
+    textAlign: 'center',
     fontSize: 13,
     lineHeight: 18,
     color: PATIENT_COLORS.textSecondary,
     fontWeight: '700',
   },
-  card: {
-    backgroundColor: PATIENT_COLORS.surface,
-    borderRadius: 22,
-    padding: 18,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: PATIENT_COLORS.border,
+  calendarGrid: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 28,
+  },
+  dateCell: {
+    width: '14.28%',
     alignItems: 'center',
-    gap: 14,
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 18,
+    marginBottom: 6,
+    minHeight: 58,
   },
-  currentCard: {
-    borderColor: '#BCD8F4',
-    backgroundColor: '#F5FAFE',
+  selectedDateCell: {
+    backgroundColor: PATIENT_COLORS.blueSoft,
   },
-  statusButton: {
-    width: 34,
+  dateBubble: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  itemContent: {
-    flex: 1,
-    gap: 4,
+  todayBubble: {
+    backgroundColor: PATIENT_COLORS.textPrimary,
   },
-  activityText: {
+  dateText: {
     fontSize: 16,
-    lineHeight: 22,
+    lineHeight: 20,
     color: PATIENT_COLORS.textPrimary,
     fontWeight: '700',
   },
-  completedActivityText: {
-    color: PATIENT_COLORS.textSecondary,
-    textDecorationLine: 'line-through',
+  todayText: {
+    color: PATIENT_COLORS.surface,
   },
-  timeText: {
-    fontSize: 14,
-    lineHeight: 18,
-    color: PATIENT_COLORS.blue,
-    fontWeight: '700',
+  outsideMonthText: {
+    color: '#B2B3BE',
   },
-  metaRow: {
+  eventMarker: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: PATIENT_COLORS.green,
+    marginTop: 6,
+  },
+  agendaPanel: {
+    backgroundColor: PATIENT_COLORS.surface,
+    borderRadius: 28,
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 28,
+    minHeight: 320,
+    borderWidth: 1,
+    borderColor: PATIENT_COLORS.border,
+  },
+  agendaPanelActive: {
+    backgroundColor: '#F5FAFE',
+    borderColor: '#BCD8F4',
+  },
+  agendaHeader: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 24,
+    gap: 12,
+  },
+  agendaHeaderCopy: {
+    flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  sourceText: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: PATIENT_COLORS.textSecondary,
-    fontWeight: '700',
+  agendaDayNumber: {
+    fontSize: 56,
+    lineHeight: 62,
+    color: PATIENT_COLORS.textPrimary,
+    fontWeight: '800',
+    fontFamily: Fonts.rounded,
   },
-  urgentBadge: {
+  agendaDayLabel: {
+    fontSize: 22,
+    lineHeight: 28,
+    color: PATIENT_COLORS.textPrimary,
+    fontWeight: '800',
+    paddingTop: 8,
+  },
+  readOnlyBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    gap: 6,
     borderRadius: 999,
-    backgroundColor: '#FFF1E7',
+    backgroundColor: PATIENT_COLORS.greenSoft,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
-  urgentText: {
+  readOnlyText: {
     fontSize: 12,
     lineHeight: 16,
-    color: '#A04B1A',
+    color: PATIENT_COLORS.green,
     fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
-  noteText: {
-    fontSize: 13,
-    lineHeight: 18,
+  eventsList: {
+    gap: 22,
+  },
+  eventRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 14,
+  },
+  eventTime: {
+    width: 78,
+    fontSize: 18,
+    lineHeight: 24,
+    color: PATIENT_COLORS.textPrimary,
+    fontWeight: '600',
+    paddingTop: 2,
+  },
+  eventAccent: {
+    width: 6,
+    height: 40,
+    borderRadius: 999,
+    marginTop: 2,
+  },
+  eventCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  eventTitle: {
+    fontSize: 18,
+    lineHeight: 24,
+    color: PATIENT_COLORS.textPrimary,
+    fontWeight: '700',
+  },
+  eventRange: {
+    fontSize: 14,
+    lineHeight: 20,
     color: PATIENT_COLORS.textSecondary,
+    fontWeight: '500',
   },
-  completeButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: PATIENT_COLORS.blueSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
+  emptyState: {
+    paddingTop: 8,
+    gap: 6,
+  },
+  emptyStateTitle: {
+    fontSize: 18,
+    lineHeight: 24,
+    color: PATIENT_COLORS.textPrimary,
+    fontWeight: '700',
+  },
+  emptyStateText: {
+    fontSize: 15,
+    lineHeight: 20,
+    color: PATIENT_COLORS.textSecondary,
+    fontWeight: '500',
+    maxWidth: 280,
   },
 });

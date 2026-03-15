@@ -9,6 +9,7 @@ import {
   saveDailyTaskCompletion,
   saveMedicationCompletion,
   sortFormattedTimes,
+  subscribeToCalendarEvents,
   subscribeToCaregiverCheckIn,
   subscribeToDailyTasks,
   subscribeToMedicationCompletions,
@@ -25,6 +26,7 @@ import { useLinkedAccount } from '@/lib/use-linked-account';
 export type ScheduleStatus = 'completed' | 'current' | 'upcoming';
 export type NotificationType = 'info' | 'success' | 'warning';
 export type ScheduleSource = 'daily-task' | 'medication';
+export type PlannerSource = 'daily-task' | 'calendar-event' | 'medication';
 
 export type ScheduleItem = {
   id: string;
@@ -38,6 +40,18 @@ export type ScheduleItem = {
   sourceRecordId?: string;
   scheduledDateKey?: string;
   medicationName?: string;
+};
+
+export type PlannerItem = {
+  id: string;
+  time: string;
+  title: string;
+  note?: string;
+  source: PlannerSource;
+  status: 'completed' | 'scheduled';
+  range?: string;
+  sourceRecordId?: string;
+  scheduledDateKey?: string;
 };
 
 export type PatientNotification = {
@@ -86,6 +100,16 @@ type MedicationCompletionRecord = {
   status?: string;
 };
 
+type CalendarEventRecord = {
+  id: string;
+  title?: string;
+  time?: string;
+  range?: string;
+  dateKey?: string;
+  day?: number;
+  timeSortValue?: number;
+};
+
 type PatientContextValue = {
   patientName: string;
   patientAge: number;
@@ -99,6 +123,8 @@ type PatientContextValue = {
   isLocationSharing: boolean;
   locationStatusText: string;
   schedule: ScheduleItem[];
+  calendarEvents: CalendarEventRecord[];
+  todayPlanItems: PlannerItem[];
   addNotification: (notification: PatientNotification) => void;
   setDeviating: (value: boolean) => void;
   setHomeSafe: (value: boolean) => void;
@@ -218,6 +244,7 @@ export function PatientProvider({ children }: { children: React.ReactNode }) {
   const [patientRecord, setPatientRecord] = useState<PatientRecord | null>(null);
   const [caregiverCheckIn, setCaregiverCheckIn] = useState<CaregiverCheckIn | null>(null);
   const [dailyTasks, setDailyTasks] = useState<DailyTaskRecord[]>([]);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEventRecord[]>([]);
   const [medications, setMedications] = useState<MedicationRecord[]>([]);
   const [medicationCompletions, setMedicationCompletions] = useState<MedicationCompletionRecord[]>([]);
   const [manualNotifications, setManualNotifications] = useState<PatientNotification[]>([]);
@@ -275,6 +302,23 @@ export function PatientProvider({ children }: { children: React.ReactNode }) {
       },
       (error: unknown) => {
         console.error('Daily task subscription failed', error);
+      }
+    );
+  }, [patientId]);
+
+  useEffect(() => {
+    if (!patientId) {
+      setCalendarEvents([]);
+      return undefined;
+    }
+
+    return subscribeToCalendarEvents(
+      patientId,
+      (items: CalendarEventRecord[]) => {
+        setCalendarEvents(items as CalendarEventRecord[]);
+      },
+      (error: unknown) => {
+        console.error('Calendar event subscription failed', error);
       }
     );
   }, [patientId]);
@@ -405,6 +449,18 @@ export function PatientProvider({ children }: { children: React.ReactNode }) {
           await shareCoords(lastKnownPosition.coords);
         }
 
+        try {
+          const currentPosition = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.BestForNavigation,
+          });
+
+          if (currentPosition?.coords) {
+            await shareCoords(currentPosition.coords);
+          }
+        } catch (currentPositionError) {
+          console.error('Getting the current patient position failed', currentPositionError);
+        }
+
         let backgroundStatusText = 'Location sharing is on while this app is open.';
 
         try {
@@ -430,9 +486,10 @@ export function PatientProvider({ children }: { children: React.ReactNode }) {
 
         locationSubscription = await Location.watchPositionAsync(
           {
-            accuracy: Location.Accuracy.Balanced,
-            timeInterval: 20000,
-            distanceInterval: 15,
+            accuracy: Location.Accuracy.BestForNavigation,
+            mayShowUserSettingsDialog: true,
+            timeInterval: 5000,
+            distanceInterval: 5,
           },
           (position) => {
             void shareCoords(position.coords);
@@ -524,6 +581,40 @@ export function PatientProvider({ children }: { children: React.ReactNode }) {
     });
   }, [completedTaskIds, dailyTasks, medicationCompletions, medications, patientId, todayKey]);
 
+  const todayPlanItems = useMemo<PlannerItem[]>(() => {
+    const scheduledItems = schedule.map((item) => ({
+      id: item.id,
+      time: item.time,
+      title: item.activity,
+      note: item.note ?? '',
+      source: item.source as PlannerSource,
+      status: item.status === 'completed' ? ('completed' as const) : ('scheduled' as const),
+      sourceRecordId: item.sourceRecordId,
+      scheduledDateKey: item.scheduledDateKey ?? todayKey,
+      range: item.time,
+      timeSortValue: getTimeSortValue(item.time ?? ''),
+    }));
+
+    const calendarItems = calendarEvents
+      .filter((event) => (event.dateKey ?? '') === todayKey)
+      .map((event) => ({
+        id: `calendar-event-${event.id}`,
+        time: event.time ?? 'All day',
+        title: event.title?.trim() || 'Calendar event',
+        note: event.range?.trim() || 'Scheduled event',
+        source: 'calendar-event' as const,
+        status: 'scheduled' as const,
+        sourceRecordId: event.id,
+        scheduledDateKey: event.dateKey ?? todayKey,
+        range: event.range ?? '',
+        timeSortValue: event.timeSortValue ?? getTimeSortValue(event.time ?? ''),
+      }));
+
+    return [...scheduledItems, ...calendarItems]
+      .sort((leftItem, rightItem) => leftItem.timeSortValue - rightItem.timeSortValue)
+      .map(({ timeSortValue, ...item }) => item);
+  }, [calendarEvents, schedule, todayKey]);
+
   const notifications = useMemo<PatientNotification[]>(() => {
     const hasLinkedPatient = Boolean(patientId && patientRecord?.patientName);
     const hasActiveCaregiver = Boolean(caregiverCheckIn?.caregiverName);
@@ -558,6 +649,8 @@ export function PatientProvider({ children }: { children: React.ReactNode }) {
       locationStatusText,
       notifications,
       schedule,
+      calendarEvents,
+      todayPlanItems,
       addNotification: (notification) => {
         setManualNotifications((currentNotifications) => [notification, ...currentNotifications]);
       },
@@ -639,8 +732,10 @@ export function PatientProvider({ children }: { children: React.ReactNode }) {
       patientId,
       patientRecord?.patientAge,
       patientRecord?.patientName,
+      calendarEvents,
       locationStatusText,
       schedule,
+      todayPlanItems,
       todayKey,
       userId,
     ]

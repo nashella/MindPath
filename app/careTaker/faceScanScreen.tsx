@@ -23,17 +23,29 @@ const FAMILIAR_FACES = [
     lastSeen: 'Today | 1:05 PM',
   },
   {
-    id: 'jackie',
-    name: 'Jackie',
+    id: 'Ashay',
+    name: 'Ashay',
     relation: 'Daughter',
     lastSeen: 'Yesterday | 6:30 PM',
   },
   {
-    id: 'nurse-lee',
-    name: 'Nurse Lee',
+    id: 'nurse nashella',
+    name: 'Nurse nashella',
     relation: 'Provider',
     lastSeen: 'Thursday | 10:00 AM',
   },
+  {
+    id: 'Ashley',
+    name: 'Ashley',
+    relation:"Gardener",
+    lastseen:"Na"
+  },
+  {
+     id: 'unknown',
+     name: 'Unknown',
+    relation:"Unknown person",
+    lastseen:"Na"
+}
 ];
 
 export default function FaceScanScreen() {

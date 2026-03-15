@@ -96,10 +96,12 @@ export async function startPatientBackgroundLocationTrackingAsync(patientId: str
 
   if (!alreadyStarted) {
     await Location.startLocationUpdatesAsync(PATIENT_LOCATION_TASK_NAME, {
-      accuracy: Location.Accuracy.Balanced,
-      activityType: Location.ActivityType.Fitness,
-      distanceInterval: 15,
-      timeInterval: 20000,
+      accuracy: Location.Accuracy.BestForNavigation,
+      activityType: Location.ActivityType.OtherNavigation,
+      deferredUpdatesDistance: 0,
+      deferredUpdatesInterval: 0,
+      distanceInterval: 5,
+      timeInterval: 5000,
       pausesUpdatesAutomatically: false,
       foregroundService: {
         notificationTitle: 'MindPath location sharing',

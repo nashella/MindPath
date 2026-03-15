@@ -1,3 +1,5 @@
+import AntDesign from '@expo/vector-icons/AntDesign';
+import FontAwesome6 from '@expo/vector-icons/FontAwesome6';
 import BottomSheet, {
   BottomSheetScrollView,
   TouchableOpacity as SheetButton,
@@ -503,11 +505,7 @@ export default function GuidanceScreen() {
             {patientCoordinate ? (
               <MarkerComponent coordinate={patientCoordinate}>
                 <View style={styles.patientMarker}>
-                  <MaterialCommunityIcons
-                    color={COLORS.white}
-                    name="face-man-profile"
-                    size={30}
-                  />
+                  <FontAwesome6 color="#000000" name="person-dress" size={24} />
                 </View>
               </MarkerComponent>
             ) : null}
@@ -515,11 +513,7 @@ export default function GuidanceScreen() {
             {safeZoneCenter ? (
               <MarkerComponent coordinate={safeZoneCenter}>
                 <View style={styles.homeMarker}>
-                  <MaterialCommunityIcons
-                    color={COLORS.white}
-                    name="home-heart"
-                    size={30}
-                  />
+                  <AntDesign color="#000000" name="home" size={24} />
                 </View>
               </MarkerComponent>
             ) : null}
@@ -770,11 +764,11 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: COLORS.blue,
+    backgroundColor: COLORS.white,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 4,
-    borderColor: COLORS.white,
+    borderWidth: 3,
+    borderColor: COLORS.purple,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
@@ -785,11 +779,11 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: COLORS.green,
+    backgroundColor: COLORS.white,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 4,
-    borderColor: COLORS.white,
+    borderWidth: 3,
+    borderColor: COLORS.green,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
