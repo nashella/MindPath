@@ -31,17 +31,17 @@ const COLORS = {
   accent: '#4A90D9',
   confirm: '#6DBF8A',
   error: '#E05C5C',
+  chip: '#F5EFE7', // Added to match the previous screen's soft input fields
 };
 
 function FormField({ icon, label, ...inputProps }) {
   return (
     <View style={styles.fieldGroup}>
       <Text style={styles.fieldLabel}>{label}</Text>
-
       <View style={styles.inputShell}>
-        <MaterialCommunityIcons name={icon} size={24} color={COLORS.accent} />
+        <MaterialCommunityIcons name={icon} size={20} color={COLORS.subtitle} />
         <TextInput
-          placeholderTextColor={COLORS.subtitle}
+          placeholderTextColor="#A0A0B0"
           selectionColor={COLORS.accent}
           style={styles.input}
           {...inputProps}
@@ -106,9 +106,11 @@ export default function SignInScreen() {
         style={styles.flex}>
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.screen}>
+            
+            {/* Minimalist Hero Section */}
             <View style={styles.hero}>
               <View style={styles.heroBadge}>
-                <MaterialCommunityIcons name="shield-check-outline" size={30} color={COLORS.confirm} />
+                <MaterialCommunityIcons name="shield-check-outline" size={32} color={COLORS.confirm} />
               </View>
               <Text style={styles.title}>Caregiver Access</Text>
               <Text style={styles.subtitle}>
@@ -117,29 +119,31 @@ export default function SignInScreen() {
             </View>
 
             <View style={styles.card}>
-              <FormField
-                autoCapitalize="none"
-                autoCorrect={false}
-                icon="email-outline"
-                keyboardType="email-address"
-                label="Email"
-                onChangeText={setEmail}
-                placeholder="caregiver@email.com"
-                textContentType="emailAddress"
-                value={email}
-              />
+              <View style={styles.formContainer}>
+                <FormField
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  icon="email-outline"
+                  keyboardType="email-address"
+                  label="Email"
+                  onChangeText={setEmail}
+                  placeholder="caregiver@email.com"
+                  textContentType="emailAddress"
+                  value={email}
+                />
 
-              <FormField
-                autoCapitalize="none"
-                autoCorrect={false}
-                icon="lock-outline"
-                label="Password"
-                onChangeText={setPassword}
-                placeholder="Enter your password"
-                secureTextEntry
-                textContentType="password"
-                value={password}
-              />
+                <FormField
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  icon="lock-outline"
+                  label="Password"
+                  onChangeText={setPassword}
+                  placeholder="Enter your password"
+                  secureTextEntry
+                  textContentType="password"
+                  value={password}
+                />
+              </View>
 
               <View style={styles.statusWrap}>
                 {status ? (
@@ -151,44 +155,46 @@ export default function SignInScreen() {
                 )}
               </View>
 
-              <Pressable
-                accessibilityRole="button"
-                disabled={loadingMode !== null}
-                onPress={() => handleAuth('signup')}
-                style={[
-                  styles.primaryButton,
-                  loadingMode !== null && styles.buttonDisabled,
-                ]}>
-                {loadingMode === 'signup' ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <>
-                    <MaterialCommunityIcons name="account-plus-outline" size={22} color="#FFFFFF" />
-                    <Text style={styles.primaryButtonText}>Create account</Text>
-                  </>
-                )}
-              </Pressable>
+              <View style={styles.buttonGroup}>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={loadingMode !== null}
+                  onPress={() => handleAuth('signup')}
+                  style={[
+                    styles.primaryButton,
+                    loadingMode !== null && styles.buttonDisabled,
+                  ]}>
+                  {loadingMode === 'signup' ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <MaterialCommunityIcons name="account-plus-outline" size={20} color="#FFFFFF" />
+                      <Text style={styles.primaryButtonText}>Create account</Text>
+                    </>
+                  )}
+                </Pressable>
 
-              <Pressable
-                accessibilityRole="button"
-                disabled={loadingMode !== null}
-                onPress={() => handleAuth('signin')}
-                style={[
-                  styles.secondaryButton,
-                  loadingMode !== null && styles.buttonDisabled,
-                ]}>
-                {loadingMode === 'signin' ? (
-                  <ActivityIndicator color={COLORS.accent} />
-                ) : (
-                  <>
-                    <MaterialCommunityIcons name="login" size={22} color={COLORS.accent} />
-                    <Text style={styles.secondaryButtonText}>Sign in</Text>
-                  </>
-                )}
-              </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={loadingMode !== null}
+                  onPress={() => handleAuth('signin')}
+                  style={[
+                    styles.secondaryButton,
+                    loadingMode !== null && styles.buttonDisabled,
+                  ]}>
+                  {loadingMode === 'signin' ? (
+                    <ActivityIndicator color={COLORS.accent} />
+                  ) : (
+                    <>
+                      <MaterialCommunityIcons name="login" size={20} color={COLORS.accent} />
+                      <Text style={styles.secondaryButtonText}>Sign in</Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
 
               <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.backButton}>
-                <MaterialCommunityIcons name="arrow-left" size={20} color={COLORS.subtitle} />
+                <MaterialCommunityIcons name="arrow-left" size={18} color={COLORS.subtitle} />
                 <Text style={styles.backButtonText}>Back to role selection</Text>
               </Pressable>
             </View>
@@ -214,36 +220,37 @@ const styles = StyleSheet.create({
   },
   screen: {
     paddingHorizontal: 24,
-    gap: 20,
   },
   hero: {
     alignItems: 'center',
-    gap: 10,
+    marginBottom: 40, // Increased breathing room
   },
   heroBadge: {
-    width: 82,
-    height: 82,
-    borderRadius: 41,
+    width: 80, // Slightly smaller
+    height: 80,
+    borderRadius: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EEF8F1',
-    borderWidth: 1,
-    borderColor: '#D7EEDC',
+    backgroundColor: '#EEF8F1', // Soft fill, removed border
+    marginBottom: 20,
   },
   title: {
     fontSize: 32,
     lineHeight: 38,
-    fontWeight: '800',
+    fontWeight: '700', // Stepped down from 800
     color: COLORS.title,
     fontFamily: Fonts.rounded,
     textAlign: 'center',
+    letterSpacing: -0.5,
+    marginBottom: 8,
   },
   subtitle: {
-    fontSize: 18,
-    lineHeight: 24,
+    fontSize: 16,
+    lineHeight: 22,
     color: COLORS.subtitle,
     textAlign: 'center',
-    maxWidth: 420,
+    maxWidth: 340, // Tighter max-width for better reading lines
+    fontWeight: '400',
   },
   card: {
     width: '100%',
@@ -251,34 +258,30 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     backgroundColor: COLORS.card,
     borderRadius: 24,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: 20,
-    gap: 16,
-    shadowColor: '#D9D4CC',
-    shadowOffset: {
-      width: 0,
-      height: 10,
-    },
-    shadowOpacity: 0.12,
-    shadowRadius: 22,
+    padding: 24,
+    // Replaced heavy shadow/border with minimal ambient shadow
+    shadowColor: COLORS.title,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.04,
+    shadowRadius: 24,
     elevation: 3,
   },
+  formContainer: {
+    gap: 16,
+  },
   fieldGroup: {
-    gap: 10,
+    gap: 6,
   },
   fieldLabel: {
-    fontSize: 18,
-    lineHeight: 24,
-    fontWeight: '600',
+    fontSize: 14,
     color: COLORS.title,
+    fontWeight: '600',
+    marginLeft: 4,
   },
   inputShell: {
-    minHeight: 60,
+    minHeight: 56,
     borderRadius: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: '#FFFEFC',
+    backgroundColor: COLORS.chip, // Soft fill instead of border
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
@@ -286,24 +289,26 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    fontSize: 18,
-    lineHeight: 24,
+    fontSize: 16,
     color: COLORS.title,
-    minHeight: 56,
+    paddingVertical: 0,
   },
   statusWrap: {
-    minHeight: 44,
+    minHeight: 40,
     justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 16,
   },
   statusText: {
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '600',
+    fontSize: 14,
+    fontWeight: '500',
+    textAlign: 'center',
   },
   statusHint: {
-    fontSize: 15,
-    lineHeight: 20,
+    fontSize: 14,
     color: COLORS.subtitle,
+    textAlign: 'center',
   },
   statusError: {
     color: COLORS.error,
@@ -311,52 +316,55 @@ const styles = StyleSheet.create({
   statusSuccess: {
     color: COLORS.confirm,
   },
+  buttonGroup: {
+    gap: 12, // Tighter gap between main actions
+  },
   primaryButton: {
-    minHeight: 60,
+    minHeight: 56,
     borderRadius: 16,
     backgroundColor: COLORS.confirm,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
-  },
-  primaryButtonText: {
-    fontSize: 20,
-    lineHeight: 26,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
-  secondaryButton: {
-    minHeight: 60,
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: COLORS.accent,
-    backgroundColor: '#FFFFFF',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-  },
-  secondaryButtonText: {
-    fontSize: 20,
-    lineHeight: 26,
-    fontWeight: '800',
-    color: COLORS.accent,
-  },
-  backButton: {
-    minHeight: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
     gap: 8,
   },
+  primaryButtonText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
+  secondaryButton: {
+    minHeight: 56,
+    borderRadius: 16,
+    borderWidth: 1, // Thinned out from 2
+    borderColor: COLORS.accent,
+    backgroundColor: 'transparent',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  secondaryButtonText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: COLORS.accent,
+    letterSpacing: 0.3,
+  },
+  backButton: {
+    marginTop: 20,
+    minHeight: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
   backButtonText: {
-    fontSize: 16,
-    lineHeight: 22,
+    fontSize: 14,
     color: COLORS.subtitle,
     fontWeight: '600',
   },
   buttonDisabled: {
-    opacity: 0.75,
+    opacity: 0.7,
   },
 });

@@ -1,5 +1,6 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import { onAuthStateChanged } from 'firebase/auth';
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useState } from 'react';
@@ -21,19 +22,30 @@ import {
   subscribeToMedications,
 } from '@/lib/firestore-data';
 import { formatFirebaseError } from '@/lib/firebase-errors';
-import { auth } from '@/lib/firebase';
+import { uploadMedicationPhoto } from '@/lib/storage-data';
+import { useLinkedAccount } from '@/lib/use-linked-account';
 
+// Unified palette matching previous screens
 const COLORS = {
-  pageBackground: '#F0F4FA',
-  headerBackground: '#B8E2AA',
-  headerGlow: 'rgba(255, 255, 255, 0.28)',
-  textPrimary: '#1F2A44',
-  textSecondary: '#7D8798',
-  cardBackground: '#FFFFFF',
-  border: '#E4EAF4',
-  green: '#2FA560',
-  blue: '#5899C8',
+  background: '#FAFAFA',
+  title: '#1A1A2E',
+  subtitle: '#8A8A9E',
+  chip: '#F4F4F6',
+  white: '#FFFFFF',
+  
+  // Primary Accents
+  blue: '#4A90D9',
+  green: '#6DBF8A',
+  pink: '#D887A6', // Using Pink as the main accent for Medications to match Dashboard
+  purple: '#B786F7',
   danger: '#E05C5C',
+
+  // Soft Pastel Backgrounds
+  blueSoft: '#EBF4FC',
+  greenSoft: '#ECF9F1',
+  pinkSoft: '#FDF2F6',
+  purpleSoft: '#F6EDFD',
+  dangerSoft: '#FDECEC',
 };
 
 const FREQUENCY_OPTIONS = [
@@ -62,33 +74,27 @@ export default function MedicationScreen() {
   const [provider, setProvider] = useState('');
   const [frequency, setFrequency] = useState('');
   const [scheduledTimes, setScheduledTimes] = useState([]);
-  const [userId, setUserId] = useState(auth.currentUser?.uid ?? null);
+  const [photoUri, setPhotoUri] = useState('');
   const [savedMedications, setSavedMedications] = useState([]);
   const [statusMessage, setStatusMessage] = useState('');
   const [statusTone, setStatusTone] = useState('success');
   const [isSaving, setIsSaving] = useState(false);
+  const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [isLoadingMedications, setIsLoadingMedications] = useState(true);
   const [isTimePickerVisible, setIsTimePickerVisible] = useState(false);
+  const { userId, patientId, profileError, isProfileLoading } = useLinkedAccount();
 
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      setUserId(user?.uid ?? null);
-    });
-
-    return unsubscribeAuth;
-  }, []);
-
-  useEffect(() => {
-    if (!userId) {
+    if (!patientId) {
       setSavedMedications([]);
-      setIsLoadingMedications(false);
+      setIsLoadingMedications(isProfileLoading);
       return undefined;
     }
 
     setIsLoadingMedications(true);
 
     return subscribeToMedications(
-      userId,
+      patientId,
       (items) => {
         setSavedMedications(items);
         setIsLoadingMedications(false);
@@ -102,14 +108,13 @@ export default function MedicationScreen() {
         setIsLoadingMedications(false);
       }
     );
-  }, [userId]);
+  }, [isProfileLoading, patientId]);
 
   const handleSetTime = (formattedTime) => {
     setScheduledTimes((currentTimes) => {
       if (currentTimes.includes(formattedTime)) {
         return currentTimes;
       }
-
       return sortFormattedTimes([...currentTimes, formattedTime]);
     });
 
@@ -133,12 +138,47 @@ export default function MedicationScreen() {
     setProvider('');
     setFrequency('');
     setScheduledTimes([]);
+    setPhotoUri('');
+  };
+
+  const handleCaptureMedicationPhoto = async () => {
+    setIsCapturingPhoto(true);
+
+    try {
+      const permissionResponse = await ImagePicker.requestCameraPermissionsAsync();
+
+      if (!permissionResponse.granted) {
+        setStatusTone('error');
+        setStatusMessage('Camera permission is needed to photograph medication.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: true,
+        quality: 0.7,
+        mediaTypes: ['images'],
+      });
+
+      if (result.canceled || !result.assets?.length) {
+        return;
+      }
+
+      setPhotoUri(result.assets[0].uri);
+      setStatusTone('success');
+      setStatusMessage('Medication photo added.');
+    } catch (error) {
+      console.error('Medication camera capture failed', error);
+      setStatusTone('error');
+      setStatusMessage('Could not open the camera.');
+    } finally {
+      setIsCapturingPhoto(false);
+    }
   };
 
   const handleSaveMedication = async () => {
-    if (!userId) {
+    if (!userId || !patientId) {
       setStatusTone('error');
-      setStatusMessage('Sign in again before saving medication.');
+      setStatusMessage(profileError || 'Link this account to a patient before saving medication.');
       return;
     }
 
@@ -152,17 +192,31 @@ export default function MedicationScreen() {
     setStatusMessage('');
 
     try {
-      await saveMedicationEntry(userId, {
+      let uploadedPhoto = {
+        imagePath: '',
+        imageUrl: '',
+      };
+
+      if (photoUri) {
+        uploadedPhoto = await uploadMedicationPhoto({
+          patientId,
+          userId,
+          uri: photoUri,
+        });
+      }
+
+      await saveMedicationEntry(patientId, userId, {
         medicationName,
         purpose,
         provider,
         frequency,
         scheduledTimes,
+        ...uploadedPhoto,
       });
 
       clearForm();
       setStatusTone('success');
-      setStatusMessage('Medication saved to Firestore.');
+      setStatusMessage('Medication saved.');
     } catch (error) {
       console.error('Medication Firestore save failed', error);
       setStatusTone('error');
@@ -180,41 +234,37 @@ export default function MedicationScreen() {
       <StatusBar style="dark" />
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        
+        {/* Soft, Airy Hero */}
         <View style={styles.heroPanel}>
-          <View style={styles.heroGlowTop} />
-          <View style={styles.heroGlowBottom} />
-
           <View style={styles.heroRow}>
             <Pressable
               accessibilityRole="button"
               onPress={() => router.back()}
               style={styles.heroBackButton}>
-              <MaterialCommunityIcons name="arrow-left" size={22} color={COLORS.textSecondary} />
+              <MaterialCommunityIcons name="arrow-left" size={24} color={COLORS.title} />
             </Pressable>
 
-            <View style={styles.heroCopy}>
-              <Text style={styles.heroLabel}>Medication Manager</Text>
-              <Text style={styles.heroTitle}>Medication Entry</Text>
-            </View>
-
             <View style={styles.heroIconCircle}>
-              <MaterialCommunityIcons name="pill" size={24} color={COLORS.green} />
+              <MaterialCommunityIcons name="pill" size={28} color={COLORS.pink} />
             </View>
           </View>
+          
+          <Text style={styles.heroTitle}>Medications</Text>
+          <Text style={styles.heroSubtitle}>Manage and track patient prescriptions</Text>
         </View>
 
         <View style={styles.body}>
-          <View style={styles.formCard}>
-            <Text style={styles.formTitle}>Add Medication Details</Text>
-            <Text style={styles.formSubtitle}>
-              Use the same clear dashboard style to record medication information for caregivers.
-            </Text>
+          
+          {/* Main Form Area */}
+          <Text style={styles.sectionHeader}>Add New Entry</Text>
 
+          <View style={styles.formContainer}>
             <FormField label="Medication Name">
               <TextInput
                 onChangeText={setMedicationName}
-                placeholder="Enter medication name"
-                placeholderTextColor={COLORS.textSecondary}
+                placeholder="e.g. Amoxicillin"
+                placeholderTextColor="#A0A0B0"
                 style={styles.input}
                 value={medicationName}
               />
@@ -223,8 +273,8 @@ export default function MedicationScreen() {
             <FormField label="Purpose">
               <TextInput
                 onChangeText={setPurpose}
-                placeholder="What is it for?"
-                placeholderTextColor={COLORS.textSecondary}
+                placeholder="e.g. Blood pressure"
+                placeholderTextColor="#A0A0B0"
                 style={styles.input}
                 value={purpose}
               />
@@ -233,20 +283,17 @@ export default function MedicationScreen() {
             <FormField label="Provider">
               <TextInput
                 onChangeText={setProvider}
-                placeholder="Doctor or pharmacy name"
-                placeholderTextColor={COLORS.textSecondary}
+                placeholder="Doctor or pharmacy"
+                placeholderTextColor="#A0A0B0"
                 style={styles.input}
                 value={provider}
               />
             </FormField>
 
-            <FormField
-              hint="Choose how often this medication should be taken."
-              label="Frequency">
+            <FormField hint="Choose how often this should be taken." label="Frequency">
               <View style={styles.optionRow}>
                 {FREQUENCY_OPTIONS.map((option) => {
                   const isSelected = frequency === option;
-
                   return (
                     <Pressable
                       key={option}
@@ -262,84 +309,119 @@ export default function MedicationScreen() {
               </View>
             </FormField>
 
-            <FormField
-              hint="Pick a time from the selector and tap Set."
-              label="Scheduled Times">
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setIsTimePickerVisible(true)}
-                style={styles.openTimePickerButton}>
-                <Text style={styles.openTimePickerText}>Select time</Text>
-                <MaterialCommunityIcons name="menu-down" size={26} color={COLORS.textPrimary} />
-              </Pressable>
+            <FormField hint="Pick times for alerts and tracking." label="Scheduled Times">
+              <View style={styles.timeSelectionRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setIsTimePickerVisible(true)}
+                  style={styles.timeAddButton}>
+                  <MaterialCommunityIcons name="plus" size={20} color={COLORS.title} />
+                  <Text style={styles.timeAddButtonText}>Add Time</Text>
+                </Pressable>
 
-              <View style={styles.timeChipList}>
-                {scheduledTimes.length > 0 ? (
-                  scheduledTimes.map((timeValue) => (
+                <View style={styles.timeChipList}>
+                  {scheduledTimes.map((timeValue) => (
                     <Pressable
                       key={timeValue}
                       accessibilityRole="button"
                       onPress={() => removeScheduledTime(timeValue)}
                       style={styles.timeChip}>
                       <Text style={styles.timeChipText}>{timeValue}</Text>
-                      <MaterialCommunityIcons name="close" size={16} color={COLORS.blue} />
+                      <MaterialCommunityIcons name="close" size={16} color={COLORS.pink} />
                     </Pressable>
-                  ))
-                ) : (
-                  <Text style={styles.emptyTimesText}>No times selected yet.</Text>
-                )}
+                  ))}
+                </View>
               </View>
+              {scheduledTimes.length === 0 && (
+                <Text style={styles.emptyTimesText}>No times selected yet.</Text>
+              )}
+            </FormField>
+
+            <FormField hint="Help caregivers identify the correct pill." label="Photo">
+              {photoUri ? (
+                <View style={styles.photoPreviewCard}>
+                  <Image contentFit="cover" source={{ uri: photoUri }} style={styles.photoPreview} />
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setPhotoUri('')}
+                    style={styles.photoRemoveButton}>
+                    <MaterialCommunityIcons name="close" size={18} color={COLORS.danger} />
+                    <Text style={styles.photoRemoveButtonText}>Remove Photo</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={isCapturingPhoto}
+                  onPress={handleCaptureMedicationPhoto}
+                  style={[styles.photoButton, isCapturingPhoto && styles.buttonDisabled]}>
+                  <MaterialCommunityIcons name="camera-outline" size={20} color={COLORS.title} />
+                  <Text style={styles.photoButtonText}>
+                    {isCapturingPhoto ? 'Opening...' : 'Take Photo'}
+                  </Text>
+                </Pressable>
+              )}
             </FormField>
 
             {statusMessage ? (
-              <Text
-                style={[
-                  styles.statusText,
-                  statusTone === 'error' && styles.statusTextError,
-                ]}>
-                {statusMessage}
-              </Text>
+              <View style={[styles.statusBanner, statusTone === 'error' ? styles.statusBannerError : styles.statusBannerSuccess]}>
+                <Text style={[styles.statusText, statusTone === 'error' ? styles.statusTextError : styles.statusTextSuccess]}>
+                  {statusMessage}
+                </Text>
+              </View>
             ) : null}
 
             <Pressable
               accessibilityRole="button"
               disabled={isSaving}
               onPress={handleSaveMedication}
-              style={[styles.saveButton, isSaving && styles.saveButtonDisabled]}>
-              <MaterialCommunityIcons name="content-save-outline" size={22} color="#FFFFFF" />
-              <Text style={styles.saveButtonText}>{isSaving ? 'Saving...' : 'Save'}</Text>
+              style={[styles.saveButton, isSaving && styles.buttonDisabled]}>
+              <Text style={styles.saveButtonText}>{isSaving ? 'Saving...' : 'Save Medication'}</Text>
             </Pressable>
+          </View>
 
-            <View style={styles.savedSection}>
-              <Text style={styles.savedSectionTitle}>Saved Medications</Text>
+          {/* Saved Medications List */}
+          <Text style={[styles.sectionHeader, { marginTop: 32 }]}>Current Medications</Text>
 
-              {isLoadingMedications ? (
-                <Text style={styles.savedSectionHint}>Loading medications from Firestore...</Text>
-              ) : savedMedications.length > 0 ? (
-                savedMedications.map((savedMedication) => (
-                  <View key={savedMedication.id} style={styles.savedMedicationCard}>
+          <View style={styles.savedSection}>
+            {isLoadingMedications ? (
+              <Text style={styles.savedSectionHint}>Loading medications...</Text>
+            ) : savedMedications.length > 0 ? (
+              savedMedications.map((savedMedication) => (
+                <View key={savedMedication.id} style={styles.savedMedicationCard}>
+                  {savedMedication.imageUrl && (
+                    <Image
+                      contentFit="cover"
+                      source={{ uri: savedMedication.imageUrl }}
+                      style={styles.savedMedicationImage}
+                    />
+                  )}
+                  <View style={styles.savedMedicationBody}>
                     <View style={styles.savedMedicationHeader}>
-                      <Text style={styles.savedMedicationName}>
-                        {savedMedication.medicationName}
-                      </Text>
-                      <Text style={styles.savedMedicationFrequency}>
-                        {savedMedication.frequency}
-                      </Text>
+                      <Text style={styles.savedMedicationName}>{savedMedication.medicationName}</Text>
+                      <View style={styles.frequencyBadge}>
+                        <Text style={styles.frequencyBadgeText}>{savedMedication.frequency}</Text>
+                      </View>
                     </View>
 
                     <Text style={styles.savedMedicationMeta}>
                       {savedMedication.purpose} · {savedMedication.provider}
                     </Text>
-                    <Text style={styles.savedMedicationTimes}>
-                      {(savedMedication.scheduledTimes ?? []).join(', ')}
-                    </Text>
+
+                    <View style={styles.savedTimeRow}>
+                      <MaterialCommunityIcons name="clock-outline" size={16} color={COLORS.subtitle} />
+                      <Text style={styles.savedMedicationTimes}>
+                        {(savedMedication.scheduledTimes ?? []).join(', ')}
+                      </Text>
+                    </View>
                   </View>
-                ))
-              ) : (
-                <Text style={styles.savedSectionHint}>No medications saved yet.</Text>
-              )}
-            </View>
+                </View>
+              ))
+            ) : (
+              <Text style={styles.savedSectionHint}>No medications saved yet.</Text>
+            )}
           </View>
+
         </View>
       </ScrollView>
 
@@ -357,301 +439,305 @@ export default function MedicationScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: COLORS.pageBackground,
+    backgroundColor: COLORS.background,
   },
   scrollContent: {
-    paddingBottom: 40,
+    paddingBottom: 60,
   },
+  
+  // Minimalist Hero
   heroPanel: {
-    backgroundColor: COLORS.headerBackground,
     paddingHorizontal: 24,
-    paddingTop: 20,
-    paddingBottom: 28,
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  heroGlowTop: {
-    position: 'absolute',
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: COLORS.headerGlow,
-    top: -140,
-    right: -70,
-  },
-  heroGlowBottom: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: 'rgba(255,255,255,0.14)',
-    bottom: -120,
-    left: -50,
+    paddingTop: 16,
+    paddingBottom: 24,
   },
   heroRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
+    justifyContent: 'space-between',
+    marginBottom: 20,
   },
   heroBackButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: COLORS.cardBackground,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    backgroundColor: COLORS.chip,
   },
-  heroCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  heroLabel: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
-    letterSpacing: 0.3,
+  heroIconCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.pinkSoft, // Matching Meds accent
   },
   heroTitle: {
     fontSize: 32,
-    lineHeight: 38,
-    color: COLORS.textPrimary,
-    fontWeight: '800',
+    color: COLORS.title,
+    fontWeight: '700',
     fontFamily: Fonts.rounded,
+    letterSpacing: -0.5,
   },
-  heroIconCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.cardBackground,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+  heroSubtitle: {
+    fontSize: 16,
+    color: COLORS.subtitle,
+    marginTop: 4,
   },
+
   body: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
+    paddingHorizontal: 24,
   },
-  formCard: {
-    backgroundColor: COLORS.cardBackground,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: 20,
-    gap: 16,
-    shadowColor: '#C8D4E8',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
-    elevation: 4,
-  },
-  formTitle: {
-    fontSize: 22,
-    lineHeight: 28,
-    color: COLORS.textPrimary,
-    fontWeight: '800',
+  sectionHeader: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: COLORS.title,
     fontFamily: Fonts.rounded,
+    marginBottom: 16,
   },
-  formSubtitle: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: COLORS.textSecondary,
-    fontWeight: '500',
+
+  // Form
+  formContainer: {
+    gap: 24,
   },
   fieldGroup: {
     gap: 8,
   },
   fieldLabel: {
     fontSize: 15,
-    lineHeight: 20,
-    color: COLORS.textPrimary,
+    color: COLORS.title,
     fontWeight: '700',
+    marginLeft: 4, // Aligns with rounded input inner padding
   },
   fieldHint: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: COLORS.textSecondary,
-    fontWeight: '500',
+    fontSize: 13,
+    color: COLORS.subtitle,
+    marginLeft: 4,
+    marginTop: 2,
   },
   input: {
-    minHeight: 54,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: '#FCFDFF',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 15,
-    lineHeight: 20,
-    color: COLORS.textPrimary,
-    fontWeight: '500',
+    minHeight: 56,
+    borderRadius: 20, // Soft rectangle
+    backgroundColor: COLORS.chip,
+    paddingHorizontal: 20,
+    fontSize: 16,
+    color: COLORS.title,
   },
+
+  // Frequency Chips
   optionRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
   },
   optionChip: {
-    minWidth: 62,
-    minHeight: 42,
-    paddingHorizontal: 14,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.cardBackground,
+    height: 44,
+    paddingHorizontal: 16,
+    borderRadius: 999, // Pill shape
+    backgroundColor: COLORS.chip,
     alignItems: 'center',
     justifyContent: 'center',
   },
   optionChipSelected: {
-    borderColor: COLORS.blue,
-    backgroundColor: 'rgba(88, 153, 200, 0.12)',
+    backgroundColor: COLORS.pink,
   },
   optionChipText: {
     fontSize: 14,
-    lineHeight: 18,
-    color: COLORS.textSecondary,
-    fontWeight: '700',
+    color: COLORS.subtitle,
+    fontWeight: '600',
   },
   optionChipTextSelected: {
-    color: COLORS.blue,
+    color: COLORS.white,
   },
-  openTimePickerButton: {
-    minHeight: 58,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: '#F7F9FD',
-    paddingHorizontal: 18,
+
+  // Time Selection
+  timeSelectionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 12,
   },
-  openTimePickerText: {
-    fontSize: 18,
-    lineHeight: 24,
-    color: COLORS.textPrimary,
+  timeAddButton: {
+    height: 44,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+    backgroundColor: COLORS.chip,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  timeAddButtonText: {
+    fontSize: 14,
     fontWeight: '700',
+    color: COLORS.title,
   },
   timeChipList: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
-    marginTop: 2,
   },
   timeChip: {
-    minHeight: 38,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(88, 153, 200, 0.26)',
-    backgroundColor: 'rgba(88, 153, 200, 0.12)',
-    paddingHorizontal: 12,
+    height: 44,
+    borderRadius: 999,
+    backgroundColor: COLORS.pinkSoft,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
   timeChipText: {
     fontSize: 14,
-    lineHeight: 18,
-    color: COLORS.blue,
+    color: COLORS.pink,
     fontWeight: '700',
   },
   emptyTimesText: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: COLORS.textSecondary,
-    fontWeight: '500',
+    fontSize: 14,
+    color: COLORS.subtitle,
+    marginTop: 4,
+    marginLeft: 4,
+  },
+
+  // Photo
+  photoButton: {
+    height: 56,
+    borderRadius: 999, // Pill shape
+    backgroundColor: COLORS.chip,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  photoButtonText: {
+    fontSize: 16,
+    color: COLORS.title,
+    fontWeight: '700',
+  },
+  photoPreviewCard: {
+    borderRadius: 24, // Soft rectangle
+    backgroundColor: COLORS.chip,
+    overflow: 'hidden',
+  },
+  photoPreview: {
+    width: '100%',
+    height: 200,
+  },
+  photoRemoveButton: {
+    height: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: COLORS.chip,
+  },
+  photoRemoveButtonText: {
+    fontSize: 15,
+    color: COLORS.danger,
+    fontWeight: '700',
+  },
+
+  // Status & Actions
+  statusBanner: {
+    borderRadius: 16,
+    padding: 16,
+  },
+  statusBannerError: {
+    backgroundColor: COLORS.dangerSoft,
+  },
+  statusBannerSuccess: {
+    backgroundColor: COLORS.greenSoft,
   },
   statusText: {
     fontSize: 14,
-    lineHeight: 20,
-    color: COLORS.green,
-    fontWeight: '700',
+    fontWeight: '600',
+    textAlign: 'center',
   },
   statusTextError: {
     color: COLORS.danger,
   },
+  statusTextSuccess: {
+    color: COLORS.green,
+  },
   saveButton: {
-    minHeight: 56,
-    borderRadius: 18,
-    backgroundColor: COLORS.blue,
-    flexDirection: 'row',
+    height: 60,
+    borderRadius: 999, // Pill shape
+    backgroundColor: COLORS.pink, // Matches the Meds accent
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
-    marginTop: 4,
-  },
-  saveButtonDisabled: {
-    opacity: 0.72,
+    marginTop: 8,
   },
   saveButtonText: {
-    fontSize: 16,
-    lineHeight: 22,
-    color: '#FFFFFF',
-    fontWeight: '800',
+    fontSize: 17,
+    color: COLORS.white,
+    fontWeight: '700',
   },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+
+  // Saved Section
   savedSection: {
-    marginTop: 4,
-    gap: 12,
-  },
-  savedSectionTitle: {
-    fontSize: 18,
-    lineHeight: 24,
-    color: COLORS.textPrimary,
-    fontWeight: '800',
-    fontFamily: Fonts.rounded,
+    gap: 16,
   },
   savedSectionHint: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: COLORS.textSecondary,
-    fontWeight: '500',
+    fontSize: 15,
+    color: COLORS.subtitle,
   },
   savedMedicationCard: {
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: '#FAFBFE',
-    padding: 14,
-    gap: 6,
+    borderRadius: 24, // Large soft radius
+    backgroundColor: COLORS.white,
+    shadowColor: COLORS.title,
+    shadowOpacity: 0.04,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
+    overflow: 'hidden', // Ensures the image respects the border radius
+  },
+  savedMedicationImage: {
+    width: '100%',
+    height: 160,
+  },
+  savedMedicationBody: {
+    padding: 20,
+    gap: 8,
   },
   savedMedicationHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
-    gap: 10,
+    gap: 12,
   },
   savedMedicationName: {
     flex: 1,
-    fontSize: 16,
-    lineHeight: 22,
-    color: COLORS.textPrimary,
-    fontWeight: '800',
+    fontSize: 18,
+    color: COLORS.title,
+    fontWeight: '700',
+    fontFamily: Fonts.rounded,
   },
-  savedMedicationFrequency: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: COLORS.blue,
+  frequencyBadge: {
+    backgroundColor: COLORS.pinkSoft,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  frequencyBadgeText: {
+    fontSize: 12,
+    color: COLORS.pink,
     fontWeight: '700',
   },
   savedMedicationMeta: {
     fontSize: 14,
-    lineHeight: 20,
-    color: COLORS.textSecondary,
-    fontWeight: '500',
+    color: COLORS.subtitle,
+  },
+  savedTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 4,
   },
   savedMedicationTimes: {
     fontSize: 14,
-    lineHeight: 20,
-    color: COLORS.green,
-    fontWeight: '700',
+    color: COLORS.title,
+    fontWeight: '600',
   },
 });

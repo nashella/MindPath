@@ -1,8 +1,13 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import {
+  createUserWithEmailAndPassword,
+  deleteUser,
+  signInWithEmailAndPassword,
+} from 'firebase/auth';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Image } from 'expo-image';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -15,13 +20,18 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-} from 'firebase/auth';
 
 import { Fonts } from '@/constants/theme';
+import {
+  createPatientForCaregiverAccount,
+  getUserProfile,
+  linkAccountWithJoinCode,
+  migrateLegacyAccountIfNeeded,
+  normalizeJoinCode,
+} from '@/lib/firestore-data';
+import { formatFirebaseError } from '@/lib/firebase-errors';
 import { auth } from '@/lib/firebase';
+import { useLinkedAccount } from '@/lib/use-linked-account';
 
 const COLORS = {
   background: '#FBF8F4',
@@ -35,6 +45,7 @@ const COLORS = {
   iconCircle: '#F4C9D8',
   success: '#6DBF8A',
   error: '#E05C5C',
+  chip: '#F5EFE7',
 };
 
 function RoleButton({ icon, label, backgroundColor, onPress }) {
@@ -47,7 +58,7 @@ function RoleButton({ icon, label, backgroundColor, onPress }) {
         { backgroundColor },
         pressed && styles.roleButtonPressed,
       ]}>
-      <MaterialCommunityIcons name={icon} size={24} color={COLORS.title} />
+      <MaterialCommunityIcons name={icon} size={28} color={COLORS.title} />
       <Text style={styles.roleButtonText}>{label}</Text>
     </Pressable>
   );
@@ -57,11 +68,10 @@ function FormField({ icon, label, ...inputProps }) {
   return (
     <View style={styles.fieldGroup}>
       <Text style={styles.fieldLabel}>{label}</Text>
-
       <View style={styles.inputShell}>
-        <MaterialCommunityIcons name={icon} size={22} color={COLORS.accent} />
+        <MaterialCommunityIcons name={icon} size={20} color={COLORS.subtitle} />
         <TextInput
-          placeholderTextColor={COLORS.subtitle}
+          placeholderTextColor="#A0A0B0"
           selectionColor={COLORS.accent}
           style={styles.input}
           {...inputProps}
@@ -71,33 +81,90 @@ function FormField({ icon, label, ...inputProps }) {
   );
 }
 
+function ChoiceChip({ label, selected, onPress }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={[styles.choiceChip, selected && styles.choiceChipSelected]}>
+      <Text style={[styles.choiceChipText, selected && styles.choiceChipTextSelected]}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function getAuthTitle(role, authMode) {
+  if (role === 'patient') {
+    return authMode === 'signin' ? 'Patient Sign In' : 'Patient Sign Up';
+  }
+  return authMode === 'signin' ? 'Caregiver Sign In' : 'Caregiver Sign Up';
+}
+
+function getAuthSubtitle(role, authMode, caregiverSetupMode) {
+  if (authMode === 'signin') return 'Enter your email and password.';
+  if (role === 'patient') return 'Enter the patient code to link this account.';
+  if (caregiverSetupMode === 'connect') return 'Connect this caregiver with a patient code.';
+  return 'Create the patient first.';
+}
+
 export default function SignupScreen() {
   const router = useRouter();
-  const [showCaregiverAuth, setShowCaregiverAuth] = useState(false);
+  const { user, userProfile, isAuthReady, isProfileLoading } = useLinkedAccount();
+  const [selectedRole, setSelectedRole] = useState(null);
   const [authMode, setAuthMode] = useState('signin');
+  const [caregiverSetupMode, setCaregiverSetupMode] = useState('create');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [patientName, setPatientName] = useState('');
+  const [patientAge, setPatientAge] = useState('');
+  const [joinCode, setJoinCode] = useState('');
   const [status, setStatus] = useState('');
   const [isError, setIsError] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isAuthReady || isProfileLoading || !user) {
+      return;
+    }
+
+    if (userProfile?.role === 'patient') {
+      router.replace('/patient');
+      return;
+    }
+
+    if (userProfile?.role === 'caregiver') {
+      router.replace('/(tabs)/dashboard');
+    }
+  }, [isAuthReady, isProfileLoading, router, user, userProfile?.role]);
 
   const resetMessages = () => {
     setStatus('');
     setIsError(false);
   };
 
-  const openCaregiverAuth = () => {
+  const resetFields = () => {
+    setEmail('');
+    setPassword('');
+    setPatientName('');
+    setPatientAge('');
+    setJoinCode('');
+  };
+
+  const openAuth = (role) => {
     resetMessages();
+    resetFields();
+    setSelectedRole(role);
     setAuthMode('signin');
-    setShowCaregiverAuth(true);
+    setCaregiverSetupMode(role === 'caregiver' ? 'create' : 'connect');
   };
 
   const returnToLanding = () => {
     resetMessages();
-    setEmail('');
-    setPassword('');
-    setShowCaregiverAuth(false);
+    resetFields();
+    setSelectedRole(null);
     setAuthMode('signin');
+    setCaregiverSetupMode('create');
   };
 
   const toggleAuthMode = () => {
@@ -105,8 +172,34 @@ export default function SignupScreen() {
     setAuthMode((currentMode) => (currentMode === 'signin' ? 'signup' : 'signin'));
   };
 
-  const handleCaregiverAuth = async () => {
+  const routeFromProfile = (profile) => {
+    if (profile?.role === 'patient') {
+      router.replace('/patient');
+      return;
+    }
+    router.replace('/(tabs)/dashboard');
+  };
+
+  const resolveProfileAfterSignIn = async (user) => {
+    await migrateLegacyAccountIfNeeded(user);
+    const profile = await getUserProfile(user.uid);
+
+    if (!profile?.linkedPatientId || !profile?.role) {
+      throw new Error(
+        'This account is not linked to a patient yet. Sign up with a join code or ask a caregiver for one.'
+      );
+    }
+    return profile;
+  };
+
+  const handleAuth = async () => {
     const trimmedEmail = email.trim();
+
+    if (!selectedRole) {
+      setIsError(true);
+      setStatus('Choose Patient or Caregiver first.');
+      return;
+    }
 
     if (!trimmedEmail || !password) {
       setIsError(true);
@@ -120,26 +213,84 @@ export default function SignupScreen() {
       return;
     }
 
+    if (authMode === 'signup') {
+      if (selectedRole === 'caregiver' && caregiverSetupMode === 'create') {
+        if (!patientName.trim()) {
+          setIsError(true);
+          setStatus("Enter the patient's name.");
+          return;
+        }
+
+        const numericAge = Number(patientAge);
+        if (!patientAge.trim() || Number.isNaN(numericAge) || numericAge <= 0) {
+          setIsError(true);
+          setStatus("Enter the patient's age.");
+          return;
+        }
+      } else if (!normalizeJoinCode(joinCode)) {
+        setIsError(true);
+        setStatus('Enter the patient join code.');
+        return;
+      }
+    }
+
     setIsLoading(true);
     resetMessages();
 
     try {
       if (authMode === 'signup') {
-        await createUserWithEmailAndPassword(auth, trimmedEmail, password);
-        setStatus('Account created. Opening dashboard...');
-      } else {
-        await signInWithEmailAndPassword(auth, trimmedEmail, password);
-        setStatus('Sign in successful. Opening dashboard...');
+        const credential = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
+
+        if (selectedRole === 'caregiver' && caregiverSetupMode === 'create') {
+          await createPatientForCaregiverAccount({
+            userId: credential.user.uid,
+            email: trimmedEmail,
+            patientName,
+            patientAge,
+          });
+          setStatus('Account created.');
+          router.replace('/(tabs)/dashboard');
+          return;
+        }
+
+        try {
+          await linkAccountWithJoinCode({
+            userId: credential.user.uid,
+            email: trimmedEmail,
+            role: selectedRole,
+            joinCode,
+          });
+        } catch (error) {
+          try {
+            await deleteUser(credential.user);
+          } catch (cleanupError) {
+            console.error('Auth cleanup failed after join-code link error', cleanupError);
+          }
+          throw error;
+        }
+
+        setStatus(selectedRole === 'patient' ? 'Patient linked.' : 'Caregiver linked.');
+        routeFromProfile({ role: selectedRole });
+        return;
       }
 
-      router.replace('/(tabs)/dashboard');
+      const credential = await signInWithEmailAndPassword(auth, trimmedEmail, password);
+      const profile = await resolveProfileAfterSignIn(credential.user);
+
+      setStatus('Signed in.');
+      routeFromProfile(profile);
     } catch (error) {
       setIsError(true);
-      setStatus(error.message.replace('Firebase: ', '').replace(/\(auth\/.*\)\.?/, '').trim());
+      setStatus(formatFirebaseError(error, 'Could not complete authentication.'));
     } finally {
       setIsLoading(false);
     }
   };
+
+  const isCaregiverSignup = selectedRole === 'caregiver' && authMode === 'signup';
+  const needsJoinCode =
+    authMode === 'signup' && (selectedRole === 'patient' || caregiverSetupMode === 'connect');
+  const isSessionResolving = !isAuthReady || (Boolean(user) && isProfileLoading);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -151,125 +302,176 @@ export default function SignupScreen() {
         style={styles.flex}>
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.screen}>
-            <View style={styles.hero}>
-              <View style={styles.iconCircle}>
-                <Image
-                  contentFit="contain"
-                  source={require('../assets/images/brain.png')}
-                  style={styles.heroIcon}
-                />
-              </View>
-
-              <Text style={styles.title}>MindPath</Text>
-              <Text style={styles.subtitle}>Caring made simple</Text>
-            </View>
-
-            {!showCaregiverAuth ? (
-              <View style={styles.buttonGroup}>
-                <RoleButton
-                  backgroundColor={COLORS.patientButton}
-                  icon="account-outline"
-                  label="I'm a Patient"
-                  onPress={() => {
-                    resetMessages();
-                    router.push('/patient');
-                  }}
-                />
-
-                <RoleButton
-                  backgroundColor={COLORS.caregiverButton}
-                  icon="shield-check-outline"
-                  label="I'm a Caregiver"
-                  onPress={openCaregiverAuth}
-                />
-
-                {status ? (
-                  <Text style={[styles.landingStatus, isError && styles.errorText]}>{status}</Text>
-                ) : null}
+            {isSessionResolving ? (
+              <View style={styles.sessionLoadingCard}>
+                <ActivityIndicator color={COLORS.accent} size="large" />
+                <Text style={styles.sessionLoadingTitle}>Opening your account</Text>
+                <Text style={styles.sessionLoadingText}>
+                  Checking your saved sign-in so you can continue where you left off.
+                </Text>
               </View>
             ) : (
-              <View style={styles.authCard}>
-                <View style={styles.authHeader}>
-                  <View style={styles.authHeadingWrap}>
-                    <Text style={styles.authTitle}>
-                      {authMode === 'signin' ? 'Caregiver Sign In' : 'Create Caregiver Account'}
-                    </Text>
-                    <Text style={styles.authSubtitle}>
-                      Use your Firebase email and password to continue.
-                    </Text>
+              <>
+            
+                {/* Minimalist Hero Section */}
+                <View style={styles.hero}>
+                  <View style={styles.iconCircle}>
+                    <Image
+                      contentFit="contain"
+                      source={require('../assets/images/brain.png')}
+                      style={styles.heroIcon}
+                    />
                   </View>
-
-                  <Pressable accessibilityRole="button" onPress={toggleAuthMode} style={styles.modeToggle}>
-                    <Text style={styles.modeToggleText}>
-                      {authMode === 'signin' ? 'Sign Up' : 'Sign In'}
-                    </Text>
-                  </Pressable>
+                  <Text style={styles.title}>MindPath</Text>
+                  <Text style={styles.subtitle}>Caring made simple</Text>
                 </View>
 
-                <FormField
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  icon="email-outline"
-                  keyboardType="email-address"
-                  label="Email"
-                  onChangeText={setEmail}
-                  placeholder="caregiver@email.com"
-                  textContentType="emailAddress"
-                  value={email}
-                />
+                {!selectedRole ? (
+                  <View style={styles.buttonGroup}>
+                    <RoleButton
+                      backgroundColor={COLORS.patientButton}
+                      icon="account-outline"
+                      label="I'm a Patient"
+                      onPress={() => openAuth('patient')}
+                    />
+                    <RoleButton
+                      backgroundColor={COLORS.caregiverButton}
+                      icon="shield-check-outline"
+                      label="I'm a Caregiver"
+                      onPress={() => openAuth('caregiver')}
+                    />
+                  </View>
+                ) : (
+                  <View style={styles.authCard}>
+                    <View style={styles.authHeader}>
+                      <View style={styles.authHeadingWrap}>
+                        <Text style={styles.authTitle}>{getAuthTitle(selectedRole, authMode)}</Text>
+                        <Text style={styles.authSubtitle}>
+                          {getAuthSubtitle(selectedRole, authMode, caregiverSetupMode)}
+                        </Text>
+                      </View>
 
-                <FormField
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  icon="lock-outline"
-                  label="Password"
-                  onChangeText={setPassword}
-                  placeholder="Enter your password"
-                  secureTextEntry
-                  textContentType={authMode === 'signup' ? 'newPassword' : 'password'}
-                  value={password}
-                />
+                      <Pressable accessibilityRole="button" onPress={toggleAuthMode} style={styles.modeToggle}>
+                        <Text style={styles.modeToggleText}>
+                          {authMode === 'signin' ? 'Sign Up' : 'Sign In'}
+                        </Text>
+                      </Pressable>
+                    </View>
 
-                <View style={styles.statusWrap}>
-                  {status ? (
-                    <Text style={[styles.statusText, isError ? styles.errorText : styles.successText]}>
-                      {status}
-                    </Text>
-                  ) : (
-                    <Text style={styles.statusHint}>
-                      {authMode === 'signin'
-                        ? 'New caregiver? Tap Sign Up.'
-                        : 'Already have an account? Tap Sign In.'}
-                    </Text>
-                  )}
-                </View>
+                    {isCaregiverSignup && (
+                      <View style={styles.choiceGroup}>
+                        <ChoiceChip
+                          label="Create Patient"
+                          onPress={() => setCaregiverSetupMode('create')}
+                          selected={caregiverSetupMode === 'create'}
+                        />
+                        <ChoiceChip
+                          label="Use Join Code"
+                          onPress={() => setCaregiverSetupMode('connect')}
+                          selected={caregiverSetupMode === 'connect'}
+                        />
+                      </View>
+                    )}
 
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={isLoading}
-                  onPress={handleCaregiverAuth}
-                  style={[styles.submitButton, isLoading && styles.buttonDisabled]}>
-                  {isLoading ? (
-                    <ActivityIndicator color="#FFFFFF" />
-                  ) : (
-                    <>
-                      <MaterialCommunityIcons
-                        name={authMode === 'signin' ? 'login' : 'account-plus-outline'}
-                        size={22}
-                        color="#FFFFFF"
+                    <View style={styles.formContainer}>
+                      <FormField
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        icon="email-outline"
+                        keyboardType="email-address"
+                        label="Email"
+                        onChangeText={setEmail}
+                        placeholder={selectedRole === 'patient' ? 'patient@email.com' : 'caregiver@email.com'}
+                        textContentType="emailAddress"
+                        value={email}
                       />
-                      <Text style={styles.submitButtonText}>
-                        {authMode === 'signin' ? 'Sign In' : 'Create Account'}
-                      </Text>
-                    </>
-                  )}
-                </Pressable>
 
-                <Pressable accessibilityRole="button" onPress={returnToLanding} style={styles.backButton}>
-                  <MaterialCommunityIcons name="arrow-left" size={18} color={COLORS.subtitle} />
-                  <Text style={styles.backButtonText}>Back</Text>
-                </Pressable>
-              </View>
+                      {isCaregiverSignup && caregiverSetupMode === 'create' && (
+                        <>
+                          <FormField
+                            autoCapitalize="words"
+                            autoCorrect={false}
+                            icon="account-heart-outline"
+                            label="Patient Name"
+                            onChangeText={setPatientName}
+                            placeholder="Full name"
+                            value={patientName}
+                          />
+                          <FormField
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            icon="cake-variant-outline"
+                            keyboardType="number-pad"
+                            label="Patient Age"
+                            onChangeText={setPatientAge}
+                            placeholder="Age"
+                            value={patientAge}
+                          />
+                        </>
+                      )}
+
+                      {needsJoinCode && (
+                        <FormField
+                          autoCapitalize="characters"
+                          autoCorrect={false}
+                          icon="key-outline"
+                          label="Patient Join Code"
+                          onChangeText={(value) => setJoinCode(normalizeJoinCode(value))}
+                          placeholder="MP-123456"
+                          value={joinCode}
+                        />
+                      )}
+
+                      <FormField
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        icon="lock-outline"
+                        label="Password"
+                        onChangeText={setPassword}
+                        placeholder="Enter your password"
+                        secureTextEntry
+                        textContentType={authMode === 'signup' ? 'newPassword' : 'password'}
+                        value={password}
+                      />
+                    </View>
+
+                    <View style={styles.statusWrap}>
+                      {status ? (
+                        <Text style={[styles.statusText, isError ? styles.errorText : styles.successText]}>
+                          {status}
+                        </Text>
+                      ) : (
+                        <Text style={styles.statusHint}>
+                          {authMode === 'signin'
+                            ? 'Need an account? Tap Sign Up.'
+                            : selectedRole === 'caregiver' && caregiverSetupMode === 'create'
+                            ? 'A join code will be created for you.'
+                            : 'Use the patient code to link accounts.'}
+                        </Text>
+                      )}
+                    </View>
+
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isLoading}
+                      onPress={handleAuth}
+                      style={[styles.submitButton, isLoading && styles.buttonDisabled]}>
+                      {isLoading ? (
+                        <ActivityIndicator color="#FFFFFF" />
+                      ) : (
+                        <Text style={styles.submitButtonText}>
+                          {authMode === 'signin' ? 'Continue' : 'Create Account'}
+                        </Text>
+                      )}
+                    </Pressable>
+
+                    <Pressable accessibilityRole="button" onPress={returnToLanding} style={styles.backButton}>
+                      <MaterialCommunityIcons name="arrow-left" size={18} color={COLORS.subtitle} />
+                      <Text style={styles.backButtonText}>Back to Roles</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </>
             )}
           </View>
         </ScrollView>
@@ -294,98 +496,97 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     justifyContent: 'center',
+    paddingHorizontal: 24, // Slightly tighter padding for a cleaner edge
+  },
+  sessionLoadingCard: {
+    alignItems: 'center',
+    backgroundColor: COLORS.card,
+    borderRadius: 32,
+    borderWidth: 1,
+    borderColor: COLORS.border,
     paddingHorizontal: 28,
-    paddingVertical: 24,
+    paddingVertical: 32,
+    gap: 12,
   },
-  hero: {
-    alignItems: 'center',
-    marginBottom: 40,
-  },
-  iconCircle: {
-    width: 116,
-    height: 116,
-    borderRadius: 58,
-    backgroundColor: COLORS.iconCircle,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 28,
-  },
-  heroIcon: {
-    width: 68,
-    height: 68,
-  },
-  title: {
-    fontSize: 34,
-    lineHeight: 40,
+  sessionLoadingTitle: {
+    fontSize: 24,
     fontWeight: '800',
     color: COLORS.title,
     fontFamily: Fonts.rounded,
-    marginBottom: 10,
   },
-  subtitle: {
-    fontSize: 18,
-    lineHeight: 24,
-    fontWeight: '500',
+  sessionLoadingText: {
+    fontSize: 15,
+    lineHeight: 22,
     color: COLORS.subtitle,
     textAlign: 'center',
   },
+  hero: {
+    alignItems: 'center',
+    marginBottom: 48, // More breathing room
+  },
+  iconCircle: {
+    width: 96, // Slightly smaller and cleaner
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: COLORS.iconCircle,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  heroIcon: {
+    width: 52,
+    height: 52,
+  },
+  title: {
+    fontSize: 32,
+    lineHeight: 38,
+    fontWeight: '700', // Stepped down from 800 for elegance
+    color: COLORS.title,
+    fontFamily: Fonts.rounded,
+    letterSpacing: -0.5,
+    marginBottom: 6,
+  },
+  subtitle: {
+    fontSize: 16,
+    color: COLORS.subtitle,
+    fontWeight: '400', // Lighter weight for contrast
+  },
   buttonGroup: {
-    width: '100%',
-    maxWidth: 520,
-    alignSelf: 'center',
-    gap: 20,
+    gap: 16,
   },
   roleButton: {
-    minHeight: 82,
-    borderRadius: 22,
-    paddingHorizontal: 28,
+    minHeight: 90, // Tighter height
+    borderRadius: 20, // Softer corners
+    paddingHorizontal: 24,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 14,
-    shadowColor: '#8D8D8D',
-    shadowOffset: {
-      width: 0,
-      height: 10,
-    },
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    elevation: 3,
+    gap: 16,
+    // Replaced heavy shadow with a very soft ambient one
+    shadowColor: COLORS.title,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 2,
   },
   roleButtonPressed: {
-    opacity: 0.92,
-    transform: [{ scale: 0.99 }],
+    opacity: 0.85,
+    transform: [{ scale: 0.98 }],
   },
   roleButtonText: {
-    fontSize: 22,
-    lineHeight: 28,
+    fontSize: 20,
     fontWeight: '700',
     color: COLORS.title,
-    fontFamily: Fonts.sans,
-  },
-  landingStatus: {
-    fontSize: 15,
-    lineHeight: 20,
-    color: COLORS.subtitle,
-    textAlign: 'center',
   },
   authCard: {
-    width: '100%',
-    maxWidth: 520,
-    alignSelf: 'center',
-    backgroundColor: COLORS.card,
     borderRadius: 24,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: 20,
-    gap: 16,
-    shadowColor: '#D9D4CC',
-    shadowOffset: {
-      width: 0,
-      height: 10,
-    },
-    shadowOpacity: 0.12,
-    shadowRadius: 22,
+    backgroundColor: COLORS.card,
+    padding: 24,
+    // Minimalist shadow, no harsh border
+    shadowColor: COLORS.title,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.04,
+    shadowRadius: 24,
     elevation: 3,
   },
   authHeader: {
@@ -393,6 +594,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 12,
+    marginBottom: 24,
   },
   authHeadingWrap: {
     flex: 1,
@@ -400,110 +602,131 @@ const styles = StyleSheet.create({
   },
   authTitle: {
     fontSize: 24,
-    lineHeight: 30,
-    fontWeight: '800',
+    fontWeight: '700',
     color: COLORS.title,
     fontFamily: Fonts.rounded,
+    letterSpacing: -0.5,
   },
   authSubtitle: {
-    fontSize: 15,
+    fontSize: 14,
     lineHeight: 20,
     color: COLORS.subtitle,
   },
   modeToggle: {
-    minHeight: 34,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#D5E6F9',
-    backgroundColor: '#EEF5FD',
+    minHeight: 36,
+    paddingHorizontal: 16,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: COLORS.chip, // Blends better
   },
   modeToggleText: {
     fontSize: 14,
-    lineHeight: 18,
-    fontWeight: '700',
+    fontWeight: '600',
     color: COLORS.accent,
   },
+  choiceGroup: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 24,
+  },
+  choiceChip: {
+    minHeight: 38,
+    paddingHorizontal: 16,
+    borderRadius: 12, // More modern shape
+    backgroundColor: COLORS.chip,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  choiceChipSelected: {
+    backgroundColor: COLORS.accent,
+  },
+  choiceChipText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.subtitle,
+  },
+  choiceChipTextSelected: {
+    color: '#FFFFFF', // High contrast for selection
+  },
+  formContainer: {
+    gap: 16, // Consistent spacing between fields
+  },
   fieldGroup: {
-    gap: 10,
+    gap: 6,
   },
   fieldLabel: {
-    fontSize: 18,
-    lineHeight: 24,
-    fontWeight: '600',
+    fontSize: 14,
     color: COLORS.title,
+    fontWeight: '600',
+    marginLeft: 4, // Aligns nicely with rounded input
   },
   inputShell: {
-    minHeight: 60,
+    minHeight: 56,
     borderRadius: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: '#FFFEFC',
+    backgroundColor: COLORS.chip, // Soft fill instead of harsh border
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingHorizontal: 16,
   },
   input: {
     flex: 1,
-    minHeight: 56,
-    fontSize: 18,
-    lineHeight: 24,
+    fontSize: 16,
     color: COLORS.title,
+    paddingVertical: 0,
   },
   statusWrap: {
     minHeight: 40,
     justifyContent: 'center',
+    marginTop: 8,
+    marginBottom: 16,
+    alignItems: 'center',
   },
   statusText: {
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '600',
-  },
-  statusHint: {
-    fontSize: 15,
-    lineHeight: 20,
-    color: COLORS.subtitle,
-  },
-  errorText: {
-    color: COLORS.error,
+    fontSize: 14,
+    fontWeight: '500',
+    textAlign: 'center',
   },
   successText: {
     color: COLORS.success,
   },
+  errorText: {
+    color: COLORS.error,
+  },
+  statusHint: {
+    fontSize: 14,
+    color: COLORS.subtitle,
+    textAlign: 'center',
+  },
   submitButton: {
-    minHeight: 60,
+    minHeight: 56,
     borderRadius: 16,
     backgroundColor: COLORS.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonDisabled: {
+    opacity: 0.7,
+  },
+  submitButtonText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
+  backButton: {
+    marginTop: 16,
+    minHeight: 40,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
-  },
-  submitButtonText: {
-    fontSize: 20,
-    lineHeight: 26,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
-  backButton: {
-    minHeight: 42,
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 6,
   },
   backButtonText: {
-    fontSize: 15,
-    lineHeight: 20,
+    fontSize: 14,
     fontWeight: '600',
     color: COLORS.subtitle,
   },
-  buttonDisabled: {
-    opacity: 0.75,
-  },
 });
-

@@ -1,0 +1,43 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userProfile() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid));
+    }
+
+    function isLinkedToPatient(patientId) {
+      return isSignedIn()
+        && userProfile() != null
+        && userProfile().data.linkedPatientId == patientId;
+    }
+
+    function isCaregiverForPatient(patientId) {
+      return isLinkedToPatient(patientId)
+        && userProfile().data.role == 'caregiver';
+    }
+
+    match /patients/{patientId}/memories/{fileName} {
+      allow read: if isLinkedToPatient(patientId);
+      allow write: if isCaregiverForPatient(patientId);
+    }
+
+    match /patients/{patientId}/medications/{fileName} {
+      allow read: if isLinkedToPatient(patientId);
+      allow write: if isCaregiverForPatient(patientId);
+    }
+
+    match /patients/{patientId}/checkins/{fileName} {
+      allow read: if isLinkedToPatient(patientId);
+      allow write: if isCaregiverForPatient(patientId);
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -54,6 +54,15 @@ export default function PatientTabLayout() {
           }}
         />
         <Tabs.Screen
+          name="memories"
+          options={{
+            title: 'Memories',
+            tabBarIcon: ({ color }) => (
+              <MaterialCommunityIcons color={color} name="heart-multiple-outline" size={24} />
+            ),
+          }}
+        />
+        <Tabs.Screen
           name="face-scan"
           options={{
             title: 'Scan',

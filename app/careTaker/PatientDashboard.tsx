@@ -1,10 +1,11 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import { getAuth, signOut } from 'firebase/auth';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useRef } from 'react';
 import {
   Animated,
+  Image,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -12,9 +13,30 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Fonts } from '@/constants/theme';
-
 import { usePatientContext } from './patient-context';
-import { PATIENT_COLORS } from './patient-theme';
+
+// Unified modern soft palette
+const COLORS = {
+  background: '#FAFAFA',
+  title: '#1A1A2E',
+  subtitle: '#6B6B80', 
+  chip: '#F4F4F6',
+  white: '#FFFFFF',
+  
+  // Primary Accents
+  blue: '#4A90D9',
+  green: '#6DBF8A',
+  pink: '#D887A6',
+  purple: '#B786F7',
+  orange: '#E8925E',
+
+  // Soft Pastel Backgrounds for visual chunking
+  blueSoft: '#EBF4FC',
+  greenSoft: '#ECF9F1',
+  pinkSoft: '#FDF2F6',
+  purpleSoft: '#F6EDFD',
+  orangeSoft: '#FDF5E8',
+};
 
 export default function PatientDashboard() {
   const router = useRouter();
@@ -22,119 +44,198 @@ export default function PatientDashboard() {
     patientName,
     patientAge,
     caregiverName,
+    caregiverPhoto,
+    hasLinkedPatient,
+    hasActiveCaregiver,
     isDeviating,
-    homeSafe,
     schedule,
+    updateScheduleItem,
   } = usePatientContext();
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const sectionAnim = useRef(new Animated.Value(20)).current;
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 320,
-        useNativeDriver: true,
-      }),
-      Animated.timing(sectionAnim, {
-        toValue: 0,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [fadeAnim, sectionAnim]);
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 500,
+      useNativeDriver: true,
+    }).start();
+  }, [fadeAnim]);
 
-  const nextTasks = schedule.filter((item) => item.status !== 'completed').slice(0, 3);
+  const nextTasks = schedule.filter((i) => i.status !== 'completed');
+  const [taskIndex, setTaskIndex] = React.useState(0);
+  const currentTask = nextTasks[taskIndex] ?? null;
+  const hasNext = taskIndex < nextTasks.length - 1;
+
+  useEffect(() => {
+    if (taskIndex > 0 && taskIndex >= nextTasks.length) {
+      setTaskIndex(Math.max(nextTasks.length - 1, 0));
+    }
+  }, [nextTasks.length, taskIndex]);
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          <Animated.View
-            style={[
-              styles.sectionCard,
-              {
-                transform: [{ translateY: sectionAnim }],
-              },
-            ]}>
-            <Text style={styles.sectionEyebrow}>Who You Are</Text>
-            <Text style={styles.identityTitle}>You are {patientName}.</Text>
-            <Text style={styles.identityBody}>
-              You are {patientAge} years old. {caregiverName} is helping you today.
-            </Text>
+    <SafeAreaView style={styles.safe} edges={['top']}>
+      <Animated.ScrollView
+        contentContainerStyle={styles.scroll}
+        showsVerticalScrollIndicator={false}
+        style={{ opacity: fadeAnim }}>
 
-            <View style={styles.reassurancePill}>
-              <MaterialCommunityIcons
-                color={PATIENT_COLORS.green}
-                name="shield-check-outline"
-                size={18}
-              />
-              <Text style={styles.reassuranceText}>
-                {homeSafe ? 'You are safe at home.' : 'You are safe and following today’s plan.'}
+        <View style={styles.topBar}>
+          <Text style={styles.appName}>MindPath</Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={async () => {
+              await signOut(getAuth());
+              router.replace('/');
+            }}
+            style={({ pressed }) => [styles.signOutButton, pressed && styles.btnPressed]}>
+            <MaterialCommunityIcons name="logout-variant" size={18} color={COLORS.subtitle} />
+            <Text style={styles.signOutButtonText}>Sign Out</Text>
+          </Pressable>
+        </View>
+
+        {/* ── Section 1: Identity (Soft Purple Card) ── */}
+        <View style={[styles.softCard, { backgroundColor: COLORS.purpleSoft }]}>
+          <View style={styles.cardHeader}>
+            <MaterialCommunityIcons name="face-man-profile" size={28} color={COLORS.purple} />
+            <Text style={[styles.eyebrow, { color: COLORS.purple }]}>Who You Are</Text>
+          </View>
+          <Text style={styles.h1}>You are {patientName}.</Text>
+          <Text style={styles.subhead}>
+            {patientAge > 0
+              ? `You are ${patientAge} years old.`
+              : 'Your caregiver can add your age in setup.'}
+          </Text>
+          {!hasLinkedPatient ? (
+            <View style={styles.calloutBox}>
+              <MaterialCommunityIcons name="link-variant" size={20} color={COLORS.purple} />
+              <Text style={styles.calloutText}>
+                Ask a caregiver for your join code to connect your account.
               </Text>
             </View>
-          </Animated.View>
+          ) : null}
+        </View>
 
-          <Animated.View
-            style={[
-              styles.sectionCard,
-              {
-                transform: [{ translateY: sectionAnim }],
-              },
-            ]}>
-            <Text style={styles.sectionEyebrow}>What To Do Next</Text>
-            <Text style={styles.tasksTitle}>These are your next tasks.</Text>
+        {/* ── Section 2: Caretaker (Soft Green Card) ── */}
+        <View style={[styles.softCard, { backgroundColor: COLORS.greenSoft }]}>
+          <View style={styles.cardHeader}>
+            <MaterialCommunityIcons name="hand-heart" size={28} color={COLORS.green} />
+            <Text style={[styles.eyebrow, { color: COLORS.green }]}>Helping You Today</Text>
+          </View>
 
-            <View style={styles.taskList}>
-              {nextTasks.map((item) => (
-                <View key={item.id} style={styles.taskRow}>
-                  <View style={styles.taskTimeWrap}>
-                    <Text style={styles.taskTime}>{item.time}</Text>
-                  </View>
-
-                  <View style={styles.taskCopy}>
-                    <Text style={styles.taskText}>{item.activity}</Text>
-                  </View>
+          <View style={styles.careRow}>
+            <View style={styles.photoWrap}>
+              {caregiverPhoto ? (
+                <Image source={{ uri: caregiverPhoto }} style={styles.photo} />
+              ) : (
+                <View style={styles.photoPlaceholder}>
+                  <MaterialCommunityIcons name="account" size={40} color={COLORS.green} />
                 </View>
-              ))}
+              )}
             </View>
 
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => router.push('/patient/schedule')}
-              style={styles.inlineButton}>
-              <Text style={styles.inlineButtonText}>See full schedule</Text>
-            </Pressable>
-          </Animated.View>
+            <View style={styles.careInfo}>
+              <Text style={styles.careName}>{caregiverName || 'No Caregiver'}</Text>
+              <Text style={styles.careRole}>
+                {hasActiveCaregiver ? 'is here with you today.' : 'has not checked in yet today.'}
+              </Text>
+            </View>
+          </View>
+        </View>
 
-          <Animated.View
-            style={[
-              styles.sectionCard,
-              {
-                transform: [{ translateY: sectionAnim }],
-              },
-            ]}>
-            <Text style={styles.sectionEyebrow}>Need Help?</Text>
-            <Text style={styles.helpTitle}>
-              {isDeviating ? 'Let us guide you home.' : 'Choose one simple action.'}
-            </Text>
-            <Text style={styles.helpBody}>
-              {isDeviating
-                ? 'Tap the guidance button for calm, step-by-step directions.'
-                : 'Use guidance or familiar faces whenever you need support.'}
-            </Text>
+        {/* ── Section 3: Next task (Elevated White Card) ── */}
+        <View style={styles.taskSection}>
+          <Text style={styles.sectionHeader}>What To Do Next</Text>
 
+          {currentTask ? (
+            <>
+              <Text style={styles.taskCounter}>
+                Task {taskIndex + 1} of {nextTasks.length}
+              </Text>
+
+              <View style={styles.taskCard}>
+                {currentTask.image ? (
+                  <Image
+                    source={typeof currentTask.image === 'string' ? { uri: currentTask.image } : currentTask.image}
+                    style={styles.taskImage}
+                  />
+                ) : (
+                  <View style={styles.taskImagePlaceholder}>
+                    <MaterialCommunityIcons name="image-outline" size={56} color={COLORS.blue} />
+                  </View>
+                )}
+
+                <View style={styles.taskCardBody}>
+                  <View style={styles.taskMetaRow}>
+                    <View style={styles.timeBadge}>
+                      <MaterialCommunityIcons name="clock-outline" size={16} color={COLORS.blue} />
+                      <Text style={styles.timeTxt}>{currentTask.time}</Text>
+                    </View>
+                    
+                    {currentTask.urgent ? (
+                      <View style={styles.urgentBadge}>
+                        <MaterialCommunityIcons name="alert-circle" size={16} color={COLORS.orange} />
+                        <Text style={styles.urgentTxt}>Urgent</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  
+                  <Text style={styles.taskCardTitle}>{currentTask.activity}</Text>
+                  {currentTask.note ? <Text style={styles.taskCardNote}>{currentTask.note}</Text> : null}
+                </View>
+              </View>
+
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  updateScheduleItem(currentTask.id, { status: 'completed' });
+                  if (hasNext) setTaskIndex(0);
+                }}
+                style={({ pressed }) => [styles.doneBtn, pressed && styles.btnPressed]}>
+                <MaterialCommunityIcons name="check-circle" size={28} color={COLORS.white} />
+                <Text style={styles.doneBtnTxt}>
+                  {hasNext ? 'Done — show next task' : 'All done for today!'}
+                </Text>
+              </Pressable>
+            </>
+          ) : (
+            <View style={styles.allDoneCard}>
+              <MaterialCommunityIcons name="party-popper" size={48} color={COLORS.green} />
+              <Text style={styles.allDoneText}>You have finished everything today. Well done!</Text>
+            </View>
+          )}
+
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => router.push('/patient/schedule')}
+            style={styles.ghostBtn}>
+            <Text style={styles.ghostBtnTxt}>See full schedule</Text>
+            <MaterialCommunityIcons name="arrow-right" size={20} color={COLORS.blue} />
+          </Pressable>
+        </View>
+
+        {/* ── Section 4: Help (Soft Pink Area) ── */}
+        <View style={[styles.softCard, { backgroundColor: COLORS.pinkSoft }]}>
+          <View style={styles.cardHeader}>
+            <MaterialCommunityIcons name="lifebuoy" size={28} color={COLORS.pink} />
+            <Text style={[styles.eyebrow, { color: COLORS.pink }]}>Need Help?</Text>
+          </View>
+          
+          <Text style={styles.h2}>
+            {isDeviating ? 'Let us guide you.' : 'We are here for you.'}
+          </Text>
+
+          <View style={styles.helpButtonStack}>
             <Pressable
               accessibilityRole="button"
               onPress={() => router.push('/patient/guidance')}
-              style={styles.primaryButton}>
-              <MaterialCommunityIcons
-                color="#FFFFFF"
-                name="navigation-variant-outline"
-                size={22}
-              />
-              <Text style={styles.primaryButtonText}>
+              style={({ pressed }) => [
+                styles.primaryPillBtn, 
+                { backgroundColor: isDeviating ? COLORS.orange : COLORS.pink },
+                pressed && styles.btnPressed
+              ]}>
+              <MaterialCommunityIcons name="navigation-variant" size={24} color={COLORS.white} />
+              <Text style={styles.primaryPillBtnTxt}>
                 {isDeviating ? 'Show Directions Home' : 'Open Guidance'}
               </Text>
             </Pressable>
@@ -142,184 +243,331 @@ export default function PatientDashboard() {
             <Pressable
               accessibilityRole="button"
               onPress={() => router.push('/patient/face-scan')}
-              style={styles.secondaryButton}>
-              <MaterialCommunityIcons
-                color={PATIENT_COLORS.blue}
-                name="account-search-outline"
-                size={22}
-              />
-              <Text style={styles.secondaryButtonText}>See Familiar Faces</Text>
+              style={({ pressed }) => [styles.secondaryPillBtn, pressed && styles.btnPressed]}>
+              <MaterialCommunityIcons name="account-search" size={24} color={COLORS.pink} />
+              <Text style={styles.secondaryPillBtnTxt}>See Familiar Faces</Text>
             </Pressable>
-          </Animated.View>
-        </ScrollView>
-      </Animated.View>
+          </View>
+        </View>
+
+      </Animated.ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  safe: {
     flex: 1,
-    backgroundColor: PATIENT_COLORS.background,
+    backgroundColor: COLORS.background,
   },
-  container: {
-    flex: 1,
-    backgroundColor: PATIENT_COLORS.background,
+  scroll: {
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+    gap: 20, 
   },
-  scrollContent: {
-    paddingHorizontal: 24,
-    paddingBottom: 36,
-  },
-  sectionCard: {
-    backgroundColor: PATIENT_COLORS.surface,
-    borderRadius: 24,
-    padding: 20,
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     marginTop: 8,
-    marginBottom: 18,
-    borderWidth: 1,
-    borderColor: PATIENT_COLORS.border,
-    gap: 12,
   },
-  sectionEyebrow: {
-    fontSize: 14,
-    lineHeight: 18,
-    color: PATIENT_COLORS.textSecondary,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  identityTitle: {
-    fontSize: 32,
-    lineHeight: 38,
-    color: PATIENT_COLORS.textPrimary,
+  appName: {
+    fontSize: 24,
     fontWeight: '800',
+    color: COLORS.subtitle,
+    paddingTop: 16,
+    paddingBottom: 8,
     fontFamily: Fonts.rounded,
+    letterSpacing: -0.3,
+    textAlign: 'center',
   },
-  identityBody: {
-    fontSize: 16,
-    lineHeight: 22,
-    color: PATIENT_COLORS.textSecondary,
-    fontWeight: '500',
-  },
-  reassurancePill: {
+  signOutButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    minHeight: 42,
-    paddingHorizontal: 14,
+    backgroundColor: COLORS.chip,
     borderRadius: 999,
-    backgroundColor: PATIENT_COLORS.greenSoft,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
-  reassuranceText: {
-    flex: 1,
-    fontSize: 14,
-    lineHeight: 20,
-    color: '#2F6B45',
+  signOutButtonText: {
+    fontSize: 13,
     fontWeight: '700',
+    color: COLORS.subtitle,
   },
-  tasksTitle: {
-    fontSize: 26,
-    lineHeight: 32,
-    color: PATIENT_COLORS.textPrimary,
-    fontWeight: '800',
-    fontFamily: Fonts.rounded,
-  },
-  taskList: {
+
+  // Soft Chunking Cards
+  softCard: {
+    borderRadius: 32,
+    padding: 24,
     gap: 12,
   },
-  taskRow: {
-    borderRadius: 18,
-    backgroundColor: '#FAF8F3',
-    borderWidth: 1,
-    borderColor: PATIENT_COLORS.border,
-    padding: 14,
+  cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 8,
+    marginBottom: 4,
   },
-  taskTimeWrap: {
-    minWidth: 86,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderRadius: 14,
-    backgroundColor: PATIENT_COLORS.blueSoft,
-    alignItems: 'center',
-  },
-  taskTime: {
-    fontSize: 14,
-    lineHeight: 18,
-    color: PATIENT_COLORS.blue,
+  eyebrow: {
+    fontSize: 16, 
     fontWeight: '800',
-  },
-  taskCopy: {
-    flex: 1,
-  },
-  taskText: {
-    fontSize: 17,
-    lineHeight: 20,
-    color: PATIENT_COLORS.textPrimary,
-    fontWeight: '700',
-  },
-  inlineButton: {
-    minHeight: 54,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: PATIENT_COLORS.border,
-    backgroundColor: PATIENT_COLORS.surfaceMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 4,
-  },
-  inlineButtonText: {
-    fontSize: 16,
-    lineHeight: 22,
-    color: PATIENT_COLORS.blue,
-    fontWeight: '800',
-  },
-  helpTitle: {
-    fontSize: 26,
-    lineHeight: 32,
-    color: PATIENT_COLORS.textPrimary,
-    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
     fontFamily: Fonts.rounded,
   },
-  helpBody: {
+  h1: {
+    fontSize: 34,
+    lineHeight: 40,
+    fontWeight: '800',
+    color: COLORS.title,
+    fontFamily: Fonts.rounded,
+    letterSpacing: -0.5,
+  },
+  h2: {
+    fontSize: 26,
+    lineHeight: 32,
+    fontWeight: '800',
+    color: COLORS.title,
+    fontFamily: Fonts.rounded,
+    letterSpacing: -0.3,
+    marginBottom: 8,
+  },
+  subhead: {
+    fontSize: 20,
+    lineHeight: 28,
+    color: COLORS.title,
+    fontWeight: '500',
+    opacity: 0.8,
+  },
+  calloutBox: {
+    flexDirection: 'row',
+    backgroundColor: COLORS.white,
+    padding: 16,
+    borderRadius: 20,
+    gap: 12,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  calloutText: {
+    flex: 1,
     fontSize: 16,
     lineHeight: 22,
-    color: PATIENT_COLORS.textSecondary,
+    color: COLORS.purple,
+    fontWeight: '700',
+  },
+
+  // Caregiver Section
+  careRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    marginTop: 8,
+  },
+  photoWrap: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    overflow: 'hidden',
+    backgroundColor: COLORS.white,
+  },
+  photo: {
+    width: '100%',
+    height: '100%',
+  },
+  photoPlaceholder: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.white,
+  },
+  careInfo: {
+    flex: 1,
+    gap: 4,
+  },
+  careName: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: COLORS.title,
+    fontFamily: Fonts.rounded,
+    letterSpacing: -0.3,
+  },
+  careRole: {
+    fontSize: 18,
+    color: COLORS.title,
+    fontWeight: '500',
+    opacity: 0.8,
+  },
+
+  // Tasks Section
+  taskSection: {
+    paddingVertical: 8,
+    gap: 12,
+  },
+  sectionHeader: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: COLORS.title,
+    fontFamily: Fonts.rounded,
+  },
+  taskCounter: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.subtitle,
+  },
+  taskCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 32,
+    overflow: 'hidden',
+    shadowColor: COLORS.title,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.04,
+    shadowRadius: 24,
+    elevation: 3,
+  },
+  taskImage: {
+    width: '100%',
+    height: 220, 
+  },
+  taskImagePlaceholder: {
+    width: '100%',
+    height: 220,
+    backgroundColor: COLORS.blueSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskCardBody: {
+    padding: 24,
+    gap: 12,
+  },
+  taskMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  timeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: COLORS.blueSoft,
+  },
+  timeTxt: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.blue,
+  },
+  urgentBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: COLORS.orangeSoft,
+  },
+  urgentTxt: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.orange,
+  },
+  taskCardTitle: {
+    fontSize: 28,
+    lineHeight: 34,
+    fontWeight: '800',
+    color: COLORS.title,
+    fontFamily: Fonts.rounded,
+  },
+  taskCardNote: {
+    fontSize: 18,
+    lineHeight: 26,
+    color: COLORS.subtitle,
     fontWeight: '500',
   },
-  primaryButton: {
-    minHeight: 62,
-    borderRadius: 18,
-    backgroundColor: PATIENT_COLORS.blue,
+
+  // Done Button
+  doneBtn: {
+    minHeight: 72, 
+    borderRadius: 999,
+    backgroundColor: COLORS.blue,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
-    marginTop: 2,
+    gap: 12,
+    marginTop: 8,
   },
-  primaryButtonText: {
+  btnPressed: {
+    opacity: 0.85,
+    transform: [{ scale: 0.98 }],
+  },
+  doneBtnTxt: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: COLORS.white,
+  },
+  
+  allDoneCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 32,
+    padding: 32,
+    alignItems: 'center',
+    gap: 16,
+  },
+  allDoneText: {
+    fontSize: 20,
+    lineHeight: 28,
+    color: COLORS.title,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+
+  ghostBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 16,
+  },
+  ghostBtnTxt: {
     fontSize: 18,
-    lineHeight: 24,
-    color: '#FFFFFF',
-    fontWeight: '800',
+    fontWeight: '700',
+    color: COLORS.blue,
   },
-  secondaryButton: {
-    minHeight: 60,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: PATIENT_COLORS.border,
-    backgroundColor: PATIENT_COLORS.surfaceMuted,
+
+  // Help Section Buttons
+  helpButtonStack: {
+    gap: 12,
+    marginTop: 8,
+  },
+  primaryPillBtn: {
+    minHeight: 64,
+    borderRadius: 999,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
+    gap: 12,
   },
-  secondaryButtonText: {
-    fontSize: 17,
-    lineHeight: 22,
-    color: PATIENT_COLORS.blue,
+  primaryPillBtnTxt: {
+    fontSize: 18,
     fontWeight: '800',
+    color: COLORS.white,
+  },
+  secondaryPillBtn: {
+    minHeight: 64,
+    borderRadius: 999,
+    backgroundColor: COLORS.white,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+  },
+  secondaryPillBtnTxt: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: COLORS.pink,
   },
 });

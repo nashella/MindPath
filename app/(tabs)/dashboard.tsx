@@ -1,315 +1,504 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
+import * as ImagePicker from 'expo-image-picker';
+import { getAuth, signOut, type Auth } from 'firebase/auth';
 import { useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import type { ComponentProps } from 'react';
-import React, { useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  Animated,
+  ActivityIndicator,
+  Image,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  useWindowDimensions,
+  TextInput,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Fonts } from '@/constants/theme';
+import {
+  getTodayDateKey,
+  saveCaregiverCheckIn,
+  savePatientProfile,
+  subscribeToCaregiverCheckIn,
+  subscribeToPatient,
+} from '@/lib/firestore-data';
+import { formatFirebaseError } from '@/lib/firebase-errors';
+import { uploadCaregiverCheckInPhoto } from '@/lib/storage-data';
+import { useLinkedAccount } from '@/lib/use-linked-account';
 
-type IconName = ComponentProps<typeof MaterialCommunityIcons>['name'];
+type PatientRecord = {
+  patientName: string;
+  patientAge: number;
+  joinCode?: string;
+} | null;
 
-type OverviewCard = {
-  title: string;
-  value: string;
-  note: string;
-  icon: IconName;
-  iconColor: string;
-  iconBackground: string;
-  valueColor?: string;
-};
+type CaregiverCheckIn = {
+  caregiverName: string;
+  caregiverPhoto?: string;
+  dateKey: string;
+} | null;
 
 type QuickAction = {
   label: string;
-  icon: IconName;
+  icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'];
   iconColor: string;
-  iconBackground: string;
-  description: string;
-  route?: string;
+  backgroundColor: string;
+  route: string;
 };
 
+// Core colors retained, with specific "soft" variants added for the pastel backgrounds
 const COLORS = {
-  pageBackground: '#F0F4FA',
-  headerBackground: '#B8E2AA',
-  headerGlow: 'rgba(255, 255, 255, 0.28)',
-  textPrimary: '#1F2A44',
-  textSecondary: '#7D8798',
-  cardBackground: '#FFFFFF',
-  border: '#E4EAF4',
-  green: '#2FA560',
-  blue: '#5899C8',
-  pink: '#D06EA0',
-  purple: '#9F70F5',
-  amber: '#D4A017',
-  amberBg: '#FFF8E1',
-  amberBorder: '#F0D060',
-  sectionHeaderBg: 'rgba(255,255,255,0.70)',
-};
+  background: '#FAFAFA', // Pure, clean background like the reference
+  title: '#1A1A2E',
+  subtitle: '#8A8A9E', // Softer grey for modern typography
+  accent: '#4A90D9',
+  success: '#6DBF8A',
+  error: '#E05C5C',
+  chip: '#F4F4F6', // Neutral soft grey for inputs
+  overlay: 'rgba(26, 26, 46, 0.4)',
+  
+  // Vibrant accents
+  pink: '#D887A6',
+  purple: '#B786F7',
+  green: '#6DBF8A',
+  blue: '#4A90D9',
 
-const OVERVIEW_CARDS: OverviewCard[] = [
-  {
-    title: 'Status',
-    value: 'All Good',
-    note: 'Patient is safe at home',
-    icon: 'check-circle-outline',
-    iconColor: COLORS.green,
-    iconBackground: 'rgba(47, 165, 96, 0.14)',
-    valueColor: COLORS.green,
-  },
-  {
-    title: 'Location',
-    value: 'Home',
-    note: 'Inside safe zone',
-    icon: 'map-marker-outline',
-    iconColor: COLORS.blue,
-    iconBackground: 'rgba(88, 153, 200, 0.16)',
-  },
-  {
-    title: 'Medications',
-    value: '2 / 3',
-    note: 'Taken today',
-    icon: 'pill',
-    iconColor: COLORS.pink,
-    iconBackground: 'rgba(208, 110, 160, 0.14)',
-  },
-  {
-    title: 'Activity',
-    value: 'Normal',
-    note: 'Last active 5m ago',
-    icon: 'pulse',
-    iconColor: COLORS.purple,
-    iconBackground: 'rgba(159, 112, 245, 0.14)',
-  },
-];
+  // Soft pastel backgrounds (15-20% opacity lookaliks)
+  pinkSoft: '#FDF2F6',
+  purpleSoft: '#F6EDFD',
+  greenSoft: '#ECF9F1',
+  blueSoft: '#EBF4FC',
+  yellowSoft: '#FDF9E8',
+};
 
 const QUICK_ACTIONS: QuickAction[] = [
-  {
-    label: 'Medications',
-    icon: 'pill',
-    iconColor: COLORS.pink,
-    iconBackground: 'rgba(208, 110, 160, 0.12)',
-    description: 'Track & confirm doses',
-    route: '/medication',
-  },
-  {
-    label: 'Daily Tasks',
-    icon: 'format-list-checks',
-    iconColor: COLORS.green,
-    iconBackground: 'rgba(47, 165, 96, 0.12)',
-    description: 'View care checklist',
-    route: '/dailytask',
-  },
-  {
-    label: 'Schedule',
-    icon: 'calendar-blank-outline',
-    iconColor: COLORS.blue,
-    iconBackground: 'rgba(88, 153, 200, 0.14)',
-    description: 'Appointments & visits',
-    route: '/calender',
-  },
-  {
-    label: 'Safe Zones',
-    icon: 'shield-home-outline',
-    iconColor: COLORS.purple,
-    iconBackground: 'rgba(159, 112, 245, 0.14)',
-    description: 'Manage geo-fences',
-  },
-  {
-    label: 'Reports',
-    icon: 'chart-line',
-    iconColor: COLORS.amber,
-    iconBackground: 'rgba(212, 160, 23, 0.12)',
-    description: 'Health summaries',
-  },
+  { label: 'Medication', icon: 'brain', iconColor: COLORS.purple, backgroundColor: COLORS.purpleSoft, route: '/medication' },
+  { label: 'Tasks', icon: 'format-list-checks', iconColor: COLORS.blue, backgroundColor: COLORS.blueSoft, route: '/dailytask' },
+  { label: 'Schedule', icon: 'calendar-blank', iconColor: COLORS.green, backgroundColor: COLORS.greenSoft, route: '/calender' },
+  { label: 'CareTaker', icon: 'puzzle-outline', iconColor: COLORS.pink, backgroundColor: COLORS.pinkSoft, route: '/patient' },
 ];
 
-const ALERTS = [
-  {
-    id: '1',
-    title: 'Medication reminder',
-    text: 'Afternoon dose still needs confirmation.',
-    icon: 'bell-ring-outline' as IconName,
-    color: COLORS.amber,
-    bg: COLORS.amberBg,
-    border: COLORS.amberBorder,
-    textColor: '#6C5600',
-    subtextColor: '#8C7222',
-  },
-];
-
-function DashboardCard({
-  title,
-  value,
-  note,
-  icon,
-  iconColor,
-  iconBackground,
-  valueColor,
-  isWide,
-}: OverviewCard & { isWide: boolean }) {
-  const scale = useRef(new Animated.Value(1)).current;
-
-  const onPressIn = () =>
-    Animated.spring(scale, { toValue: 0.97, useNativeDriver: true, speed: 30 }).start();
-  const onPressOut = () =>
-    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 20 }).start();
-
-  return (
-    <Pressable
-      onPressIn={onPressIn}
-      onPressOut={onPressOut}
-      style={isWide ? styles.dashboardCardWide : styles.dashboardCardFull}>
-      <Animated.View style={[styles.dashboardCard, { transform: [{ scale }] }]}>
-        <View style={[styles.dashboardIconWrap, { backgroundColor: iconBackground }]}>
-          <MaterialCommunityIcons name={icon} size={24} color={iconColor} />
-        </View>
-        <Text style={styles.cardLabel}>{title}</Text>
-        <Text style={[styles.cardValue, valueColor ? { color: valueColor } : null]}>{value}</Text>
-        <Text style={styles.cardNote}>{note}</Text>
-      </Animated.View>
-    </Pressable>
-  );
+function formatTodayLabel() {
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'long',
+    day: 'numeric',
+  }).format(new Date());
 }
 
-function QuickActionTile({
+function Field({
   label,
-  icon,
-  iconColor,
-  iconBackground,
-  description,
-  onPress,
-}: QuickAction & { onPress: () => void }) {
-  const scale = useRef(new Animated.Value(1)).current;
-  const onPressIn = () =>
-    Animated.spring(scale, { toValue: 0.95, useNativeDriver: true, speed: 40 }).start();
-  const onPressOut = () =>
-    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 20 }).start();
-
+  value,
+  onChangeText,
+  placeholder,
+  keyboardType,
+}: {
+  label: string;
+  value: string;
+  onChangeText: (value: string) => void;
+  placeholder: string;
+  keyboardType?: 'default' | 'number-pad' | 'url';
+}) {
   return (
-    <Pressable
-      onPress={onPress}
-      onPressIn={onPressIn}
-      onPressOut={onPressOut}
-      accessibilityRole="button">
-      <Animated.View style={[styles.quickActionTile, { transform: [{ scale }] }]}>
-        <View style={[styles.quickActionIconWrap, { backgroundColor: iconBackground }]}>
-          <MaterialCommunityIcons name={icon} size={26} color={iconColor} />
-        </View>
-        <Text style={styles.quickActionLabel}>{label}</Text>
-        <Text style={styles.quickActionDesc}>{description}</Text>
-      </Animated.View>
-    </Pressable>
-  );
-}
-
-function SectionHeader({ title, actionLabel }: { title: string; actionLabel?: string }) {
-  return (
-    <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {actionLabel && (
-        <Pressable accessibilityRole="button">
-          <Text style={styles.sectionAction}>{actionLabel}</Text>
-        </Pressable>
-      )}
+    <View style={styles.fieldGroup}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <View style={styles.inputShell}>
+        <TextInput
+          keyboardType={keyboardType ?? 'default'}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          placeholderTextColor="#B0B0C0"
+          selectionColor={COLORS.accent}
+          style={styles.input}
+          value={value}
+        />
+      </View>
     </View>
   );
 }
 
 export default function CaregiverDashboard() {
   const router = useRouter();
-  const { width } = useWindowDimensions();
-  const isWide = width >= 780;
+  const todayKey = getTodayDateKey();
+  const firebaseAuth = getAuth() as Auth;
+  const {
+    userId,
+    patientId,
+    profileError,
+  } = useLinkedAccount();
+
+  const [patientRecord, setPatientRecord] = useState<PatientRecord>(null);
+  const [activeCaregiver, setActiveCaregiver] = useState<CaregiverCheckIn>(null);
+  const [statusMessage, setStatusMessage] = useState('');
+  const [statusTone, setStatusTone] = useState<'success' | 'error'>('success');
+  const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
+  const [isCheckInModalVisible, setIsCheckInModalVisible] = useState(false);
+  const [profileNameInput, setProfileNameInput] = useState('');
+  const [profileAgeInput, setProfileAgeInput] = useState('');
+  const [checkInNameInput, setCheckInNameInput] = useState('');
+  const [checkInPhotoInput, setCheckInPhotoInput] = useState('');
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isSavingCheckIn, setIsSavingCheckIn] = useState(false);
+  const [isPickingCheckInPhoto, setIsPickingCheckInPhoto] = useState(false);
+
+  useEffect(() => {
+    if (!patientId) {
+      setPatientRecord(null);
+      return undefined;
+    }
+    return subscribeToPatient(
+      patientId,
+      (patient: PatientRecord) => {
+        setPatientRecord(patient);
+        setProfileNameInput(patient?.patientName ?? '');
+        setProfileAgeInput(patient?.patientAge ? String(patient.patientAge) : '');
+      },
+      (error: unknown) => {
+        setStatusTone('error');
+        setStatusMessage(formatFirebaseError(error, 'Could not load the linked patient.'));
+      }
+    );
+  }, [patientId]);
+
+  useEffect(() => {
+    if (!patientId) {
+      setActiveCaregiver(null);
+      return undefined;
+    }
+    return subscribeToCaregiverCheckIn(
+      patientId,
+      todayKey,
+      (checkIn: CaregiverCheckIn) => {
+        setActiveCaregiver(checkIn);
+        setCheckInNameInput(checkIn?.caregiverName ?? '');
+        setCheckInPhotoInput(checkIn?.caregiverPhoto ?? '');
+      },
+      (error: unknown) => {
+        setStatusTone('error');
+        setStatusMessage(formatFirebaseError(error, "Could not load today's check-in."));
+      }
+    );
+  }, [patientId, todayKey]);
+
+  const handleSavePatientProfile = async () => {
+    if (!userId || !patientId) return;
+    setIsSavingProfile(true);
+    try {
+      await savePatientProfile(patientId, userId, {
+        patientName: profileNameInput,
+        patientAge: profileAgeInput,
+      });
+      setIsProfileModalVisible(false);
+    } catch (error) {
+      setStatusTone('error');
+      setStatusMessage(formatFirebaseError(error, 'Could not save the patient profile.'));
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const handleSaveCheckIn = async () => {
+    if (!userId || !patientId) return;
+    setIsSavingCheckIn(true);
+    try {
+      let caregiverPhoto = checkInPhotoInput.trim();
+
+      if (caregiverPhoto && !/^https?:\/\//i.test(caregiverPhoto)) {
+        const uploadedPhoto = await uploadCaregiverCheckInPhoto({
+          patientId,
+          userId,
+          uri: caregiverPhoto,
+        });
+        caregiverPhoto = uploadedPhoto.imageUrl;
+      }
+
+      await saveCaregiverCheckIn(patientId, userId, {
+        dateKey: todayKey,
+        caregiverName: checkInNameInput,
+        caregiverPhoto,
+      });
+      setIsCheckInModalVisible(false);
+    } catch (error) {
+      setStatusTone('error');
+      setStatusMessage(formatFirebaseError(error, "Could not save check-in."));
+    } finally {
+      setIsSavingCheckIn(false);
+    }
+  };
+
+  const handlePickCheckInPhoto = async () => {
+    setIsPickingCheckInPhoto(true);
+
+    try {
+      const permissionResponse =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!permissionResponse.granted) {
+        setStatusTone('error');
+        setStatusMessage('Photo library permission is needed to add a caregiver photo.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        allowsEditing: true,
+        mediaTypes: ['images'],
+        quality: 0.75,
+      });
+
+      if (result.canceled || !result.assets?.length) {
+        return;
+      }
+
+      setCheckInPhotoInput(result.assets[0].uri);
+      setStatusTone('success');
+      setStatusMessage('Caregiver photo added to today’s check-in.');
+    } catch (error) {
+      setStatusTone('error');
+      setStatusMessage(formatFirebaseError(error, 'Could not open the photo library.'));
+    } finally {
+      setIsPickingCheckInPhoto(false);
+    }
+  };
+
+  const visibleStatusMessage = statusMessage || profileError;
+  const visibleStatusTone = statusMessage ? statusTone : profileError ? 'error' : 'success';
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <StatusBar style="dark" />
 
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}>
-
-        {/* ── Hero ── */}
-        <View style={styles.heroPanel}>
-          <View style={styles.heroGlowTop} />
-          <View style={styles.heroGlowBottom} />
-          <View style={styles.heroRow}>
-            <View style={styles.heroIconCircle}>
-              <MaterialCommunityIcons name="shield-check-outline" size={28} color={COLORS.green} />
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        
+        {/* Centered, Airy Hero matching reference */}
+        <View style={styles.heroSection}>
+          <View style={styles.heroAvatarContainer}>
+             <MaterialCommunityIcons name="face-man-profile" size={48} color={COLORS.accent} />
+          </View>
+          <Text style={styles.heroGreeting}>
+            {activeCaregiver ? `Good Morning, ${activeCaregiver.caregiverName}!` : 'Good Morning!'}
+          </Text>
+          
+          <View style={styles.heroTipCard}>
+            <View style={styles.tipIconWrap}>
+              <MaterialCommunityIcons name="lightbulb-on-outline" size={20} color="#D4B230" />
             </View>
-            <View style={styles.heroCopy}>
-              <Text style={styles.heroLabel}>Caregiver Dashboard</Text>
-              <Text style={styles.heroTitle}>Welcome Back</Text>
-            </View>
-            <Pressable accessibilityRole="button" style={styles.heroNotifButton}>
-              <MaterialCommunityIcons name="bell-outline" size={22} color={COLORS.textSecondary} />
-              <View style={styles.notifDot} />
-            </Pressable>
+            <Text style={styles.tipText}>
+              Daily Tip: Maintain a consistent routine today to help {patientRecord?.patientName || 'the patient'} stay grounded.
+            </Text>
           </View>
         </View>
 
-        <View style={styles.body}>
+        <View style={styles.contentBody}>
+          {visibleStatusMessage ? (
+            <View
+              style={[
+                styles.statusBanner,
+                visibleStatusTone === 'error' && styles.statusBannerError,
+              ]}>
+              <MaterialCommunityIcons
+                color={visibleStatusTone === 'error' ? COLORS.error : COLORS.success}
+                name={visibleStatusTone === 'error' ? 'alert-circle' : 'check-circle'}
+                size={18}
+              />
+              <Text
+                style={[
+                  styles.statusBannerText,
+                  visibleStatusTone === 'error' && styles.statusBannerTextError,
+                ]}>
+                {visibleStatusMessage}
+              </Text>
+            </View>
+          ) : null}
+          
+          <Text style={styles.sectionHeader}>What would you like to do?</Text>
 
-          {/* ── Overview Cards ── */}
-          <SectionHeader title="Overview" />
-          <View style={styles.cardGrid}>
-            {OVERVIEW_CARDS.map((card) => (
-              <DashboardCard key={card.title} isWide={isWide} {...card} />
+          {/* List-style overview items matching the first reference image */}
+          <View style={styles.actionList}>
+            <Pressable 
+              style={[styles.listCard, { backgroundColor: COLORS.purpleSoft }]}
+              onPress={() => setIsProfileModalVisible(true)}
+            >
+              <View style={[styles.listIconBox, { backgroundColor: COLORS.purple }]}>
+                <MaterialCommunityIcons name="account-heart" size={20} color="#FFF" />
+              </View>
+              <View style={styles.listCopy}>
+                <Text style={[styles.listTitle, { color: COLORS.purple }]}>Patient Profile</Text>
+                <Text style={styles.listSubtitle}>
+                  {patientRecord ? `${patientRecord.patientName}, Age ${patientRecord.patientAge}` : 'Set up patient record'}
+                </Text>
+              </View>
+              <MaterialCommunityIcons name="chevron-right" size={24} color={COLORS.purple} />
+            </Pressable>
+
+            <Pressable 
+              style={[styles.listCard, { backgroundColor: COLORS.greenSoft }]}
+              onPress={() => setIsCheckInModalVisible(true)}
+            >
+              <View style={[styles.listIconBox, { backgroundColor: COLORS.green }]}>
+                <MaterialCommunityIcons name="calendar-check" size={20} color="#FFF" />
+              </View>
+              <View style={styles.listCopy}>
+                <Text style={[styles.listTitle, { color: COLORS.green }]}>Daily Check-In</Text>
+                <Text style={styles.listSubtitle}>
+                  {activeCaregiver ? `Active: ${activeCaregiver.caregiverName}` : 'Assign caregiver for today'}
+                </Text>
+              </View>
+              <MaterialCommunityIcons name="chevron-right" size={24} color={COLORS.green} />
+            </Pressable>
+
+            {patientRecord?.joinCode && (
+              <Pressable style={[styles.listCard, { backgroundColor: COLORS.blueSoft }]}>
+                <View style={[styles.listIconBox, { backgroundColor: COLORS.blue }]}>
+                  <MaterialCommunityIcons name="key" size={20} color="#FFF" />
+                </View>
+                <View style={styles.listCopy}>
+                  <Text style={[styles.listTitle, { color: COLORS.blue }]}>Join Code</Text>
+                  <Text style={styles.listSubtitle}>{patientRecord.joinCode}</Text>
+                </View>
+                <MaterialCommunityIcons name="content-copy" size={20} color={COLORS.blue} />
+              </Pressable>
+            )}
+          </View>
+
+          <Text style={[styles.sectionHeader, { marginTop: 16 }]}>Quick Actions</Text>
+
+          {/* Grid-style actions matching the third reference image */}
+          <View style={styles.gridContainer}>
+            {QUICK_ACTIONS.map((action) => (
+              <Pressable
+                key={action.label}
+                onPress={() => router.push(action.route)}
+                style={({ pressed }) => [
+                  styles.gridItem,
+                  { backgroundColor: action.backgroundColor },
+                  pressed && { opacity: 0.8 },
+                ]}
+              >
+                <MaterialCommunityIcons name={action.icon} size={36} color={action.iconColor} style={{ marginBottom: 12 }} />
+                <Text style={[styles.gridItemText, { color: action.iconColor }]}>{action.label}</Text>
+                
+              </Pressable>
             ))}
           </View>
 
-          {/* ── Quick Actions landscape panel ── */}
-          <SectionHeader title="Quick Actions" actionLabel="See all" />
-          <View style={styles.quickActionsPanel}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.quickActionsScroll}>
-              {QUICK_ACTIONS.map((action) => (
-                <QuickActionTile
-                  key={action.label}
-                  onPress={() => {
-                    if (action.route) {
-                      router.push(action.route);
-                    }
-                  }}
-                  {...action}
-                />
-              ))}
-            </ScrollView>
-          </View>
-
-          {/* ── Alerts ── */}
-          <SectionHeader title="Recent Alerts" actionLabel="Dismiss all" />
-          {ALERTS.map((alert) => (
-            <View
-              key={alert.id}
-              style={[styles.alertCard, { backgroundColor: alert.bg, borderColor: alert.border }]}>
-              <View style={styles.alertRow}>
-                <View style={[styles.alertBadge, { backgroundColor: 'rgba(255,255,255,0.80)' }]}>
-                  <MaterialCommunityIcons name={alert.icon} size={20} color={alert.color} />
-                </View>
-                <View style={styles.alertCopy}>
-                  <Text style={[styles.alertTitle, { color: alert.textColor }]}>{alert.title}</Text>
-                  <Text style={[styles.alertText, { color: alert.subtextColor }]}>{alert.text}</Text>
-                </View>
-                <Pressable accessibilityRole="button" style={styles.alertChevron}>
-                  <MaterialCommunityIcons name="chevron-right" size={20} color={alert.color} />
-                </Pressable>
-              </View>
-            </View>
-          ))}
+          {/* Full Pill Button for Logout, matching "Begin Session" from reference */}
+          <Pressable 
+            style={styles.pillButtonSecondary}
+            onPress={async () => {
+              await signOut(firebaseAuth);
+              router.replace('/');
+            }}
+          >
+            <Text style={styles.pillButtonTextSecondary}>Sign Out</Text>
+          </Pressable>
 
         </View>
       </ScrollView>
+
+      {/* Patient Profile Modal - Updated to soft minimal style */}
+      <Modal visible={isProfileModalVisible} animationType="fade" transparent onRequestClose={() => setIsProfileModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Patient Record</Text>
+            <Text style={styles.modalSubtitle}>Manage the core details for the linked patient.</Text>
+
+            <View style={styles.modalForm}>
+              <Field label="Full Name" value={profileNameInput} onChangeText={setProfileNameInput} placeholder="Patient name" />
+              <Field label="Age" value={profileAgeInput} onChangeText={setProfileAgeInput} keyboardType="number-pad" placeholder="Age" />
+            </View>
+
+            <Pressable 
+              style={styles.pillButtonPrimary}
+              onPress={handleSavePatientProfile}
+              disabled={isSavingProfile}
+            >
+              <Text style={styles.pillButtonTextPrimary}>{isSavingProfile ? 'Saving...' : 'Save Profile'}</Text>
+            </Pressable>
+            
+            <Pressable style={styles.pillButtonGhost} onPress={() => setIsProfileModalVisible(false)}>
+              <Text style={styles.pillButtonTextGhost}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Check-In Modal */}
+      <Modal visible={isCheckInModalVisible} animationType="fade" transparent onRequestClose={() => setIsCheckInModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Check-In</Text>
+            <Text style={styles.modalSubtitle}>Set the active caregiver for {formatTodayLabel()}.</Text>
+
+            <View style={styles.modalForm}>
+              <Field label="Caregiver Name" value={checkInNameInput} onChangeText={setCheckInNameInput} placeholder="Who is on duty?" />
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Caregiver Photo</Text>
+                {checkInPhotoInput ? (
+                  <View style={styles.checkInPhotoCard}>
+                    <Image source={{ uri: checkInPhotoInput }} style={styles.checkInPhotoPreview} />
+                    <View style={styles.checkInPhotoActions}>
+                      <Pressable
+                        disabled={isPickingCheckInPhoto}
+                        onPress={() => {
+                          void handlePickCheckInPhoto();
+                        }}
+                        style={styles.photoPickerButton}>
+                        {isPickingCheckInPhoto ? (
+                          <ActivityIndicator color={COLORS.green} />
+                        ) : (
+                          <>
+                            <MaterialCommunityIcons name="image-edit-outline" size={18} color={COLORS.green} />
+                            <Text style={styles.photoPickerButtonText}>Change Photo</Text>
+                          </>
+                        )}
+                      </Pressable>
+                      <Pressable
+                        onPress={() => setCheckInPhotoInput('')}
+                        style={styles.photoRemoveButton}>
+                        <MaterialCommunityIcons name="close-circle-outline" size={18} color={COLORS.error} />
+                        <Text style={styles.photoRemoveButtonText}>Remove</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : (
+                  <Pressable
+                    disabled={isPickingCheckInPhoto}
+                    onPress={() => {
+                      void handlePickCheckInPhoto();
+                    }}
+                    style={styles.photoPickerButton}>
+                    {isPickingCheckInPhoto ? (
+                      <ActivityIndicator color={COLORS.green} />
+                    ) : (
+                      <>
+                        <MaterialCommunityIcons name="image-plus" size={18} color={COLORS.green} />
+                        <Text style={styles.photoPickerButtonText}>Choose From Gallery</Text>
+                      </>
+                    )}
+                  </Pressable>
+                )}
+              </View>
+            </View>
+
+            <Pressable 
+              style={[styles.pillButtonPrimary, { backgroundColor: COLORS.green }]}
+              onPress={handleSaveCheckIn}
+              disabled={isSavingCheckIn}
+            >
+              <MaterialCommunityIcons name="play" size={20} color="#FFF" />
+              <Text style={styles.pillButtonTextPrimary}>{isSavingCheckIn ? 'Starting...' : 'Begin Session'}</Text>
+            </Pressable>
+            
+            <Pressable style={styles.pillButtonGhost} onPress={() => setIsCheckInModalVisible(false)}>
+              <Text style={styles.pillButtonTextGhost}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -317,268 +506,290 @@ export default function CaregiverDashboard() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: COLORS.pageBackground,
+    backgroundColor: COLORS.background,
   },
   scrollContent: {
-    paddingBottom: 48,
+    paddingBottom: 60,
   },
-
-  /* Hero */
-  heroPanel: {
-    backgroundColor: COLORS.headerBackground,
+  
+  // Center Hero - Matches top of reference images
+  heroSection: {
+    alignItems: 'center',
     paddingHorizontal: 24,
-    paddingTop: 20,
-    paddingBottom: 28,
-    overflow: 'hidden',
-    position: 'relative',
+    paddingTop: 40,
+    paddingBottom: 24,
   },
-  heroGlowTop: {
-    position: 'absolute',
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: COLORS.headerGlow,
-    top: -140,
-    right: -70,
-  },
-  heroGlowBottom: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: 'rgba(255,255,255,0.14)',
-    bottom: -120,
-    left: -50,
-  },
-  heroRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-  },
-  heroIconCircle: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+  heroAvatarContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: COLORS.blueSoft,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: COLORS.cardBackground,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
+    marginBottom: 24,
   },
-  heroCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  heroLabel: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
-    letterSpacing: 0.3,
-  },
-  heroTitle: {
-    fontSize: 34,
-    lineHeight: 40,
-    color: COLORS.textPrimary,
-    fontWeight: '800',
+  heroGreeting: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: COLORS.title,
     fontFamily: Fonts.rounded,
+    letterSpacing: -0.5,
+    marginBottom: 24,
   },
-  heroNotifButton: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.cardBackground,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  notifDot: {
-    position: 'absolute',
-    top: 9,
-    right: 10,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#EF5350',
-    borderWidth: 1.5,
-    borderColor: COLORS.cardBackground,
-  },
-
-  /* Body */
-  body: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
-    gap: 10,
-  },
-
-  /* Section header */
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-    marginTop: 8,
-  },
-  sectionTitle: {
-    fontSize: 19,
-    lineHeight: 24,
-    color: COLORS.textPrimary,
-    fontWeight: '800',
-    fontFamily: Fonts.rounded,
-  },
-  sectionAction: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: COLORS.blue,
-    fontWeight: '600',
-  },
-
-  /* Overview cards */
-  cardGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 14,
-    marginBottom: 10,
-  },
-  dashboardCardWide: {
-    width: '48.5%',
-  },
-  dashboardCardFull: {
+  heroTipCard: {
     width: '100%',
-  },
-  dashboardCard: {
-    backgroundColor: COLORS.cardBackground,
-    borderRadius: 22,
-    padding: 18,
-    minHeight: 134,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    shadowColor: '#C8D4E8',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.30,
-    shadowRadius: 16,
-    elevation: 4,
-  },
-  dashboardIconWrap: {
-    width: 40,
-    height: 40,
+    backgroundColor: COLORS.yellowSoft,
     borderRadius: 20,
+    padding: 16,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  cardLabel: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: COLORS.textSecondary,
-    fontWeight: '600',
-    letterSpacing: 0.2,
-    marginBottom: 4,
-  },
-  cardValue: {
-    fontSize: 22,
-    lineHeight: 28,
-    color: COLORS.textPrimary,
-    fontWeight: '800',
-    marginBottom: 4,
-  },
-  cardNote: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: '#A0A8B8',
-    fontWeight: '500',
-  },
-
-  /* ── Quick Actions landscape panel ── */
-  quickActionsPanel: {
-    marginHorizontal: -20,          // bleed edge-to-edge
-    marginBottom: 10,
-  },
-  quickActionsScroll: {
-    paddingHorizontal: 20,
-    paddingVertical: 4,
     gap: 12,
   },
-  quickActionTile: {
-    width: 140,
-    backgroundColor: COLORS.cardBackground,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    padding: 16,
-    paddingBottom: 18,
-    shadowColor: '#C8D4E8',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.28,
-    shadowRadius: 16,
-    elevation: 4,
-    gap: 10,
-  },
-  quickActionIconWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: 'center',
+  tipIconWrap: {
     justifyContent: 'center',
+    alignItems: 'center',
   },
-  quickActionLabel: {
-    fontSize: 15,
+  tipText: {
+    flex: 1,
+    fontSize: 14,
     lineHeight: 20,
-    color: COLORS.textPrimary,
-    fontWeight: '700',
-  },
-  quickActionDesc: {
-    fontSize: 12,
-    lineHeight: 16,
-    color: COLORS.textSecondary,
+    color: '#937E28', // Slightly darker yellow/brown for text
     fontWeight: '500',
   },
 
-  /* Alerts */
-  alertCard: {
-    borderRadius: 20,
-    borderWidth: 1,
-    padding: 16,
-    marginBottom: 10,
+  contentBody: {
+    paddingHorizontal: 24,
   },
-  alertRow: {
+  statusBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 20,
+    backgroundColor: COLORS.greenSoft,
+    marginBottom: 18,
   },
-  alertBadge: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
+  statusBannerError: {
+    backgroundColor: COLORS.pinkSoft,
   },
-  alertCopy: {
+  statusBannerText: {
     flex: 1,
-    gap: 3,
-  },
-  alertTitle: {
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '700',
-  },
-  alertText: {
     fontSize: 13,
     lineHeight: 18,
-    fontWeight: '500',
+    color: COLORS.success,
+    fontWeight: '600',
   },
-  alertChevron: {
-    width: 32,
-    height: 32,
+  statusBannerTextError: {
+    color: COLORS.error,
+  },
+  sectionHeader: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.title,
+    marginBottom: 16,
+    fontFamily: Fonts.rounded,
+  },
+
+  // List Items - Matches "What would you like to do?"
+  actionList: {
+    gap: 12,
+    marginBottom: 24,
+  },
+  listCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 24, // Very soft corners
+  },
+  listIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 16,
+  },
+  listCopy: {
+    flex: 1,
+  },
+  listTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  listSubtitle: {
+    fontSize: 13,
+    color: COLORS.subtitle,
+    opacity: 0.8,
+  },
+
+  // Grid - Matches "Pick a brain exercise!"
+  gridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 16,
+    marginBottom: 40,
+  },
+  gridItem: {
+    width: '47.5%', // Slightly under 50% to account for gap
+    aspectRatio: 1, // Makes them perfect squares
+    borderRadius: 32, // Ultra soft corners like the reference
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  gridItemText: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  gridItemSub: {
+    fontSize: 12,
+    color: COLORS.subtitle,
+    opacity: 0.6,
+  },
+
+  // Pill Buttons - Matches "Begin Session"
+  pillButtonPrimary: {
+    width: '100%',
+    height: 60,
+    backgroundColor: COLORS.purple, // Match the reference primary action color
+    borderRadius: 999, // Full pill shape
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+  },
+  pillButtonTextPrimary: {
+    color: '#FFF',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  pillButtonSecondary: {
+    width: '100%',
+    height: 60,
+    backgroundColor: COLORS.chip,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 20,
+  },
+  pillButtonTextSecondary: {
+    color: COLORS.subtitle,
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  pillButtonGhost: {
+    width: '100%',
+    height: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  pillButtonTextGhost: {
+    color: COLORS.subtitle,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+
+  // Modals - Soft and minimal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: COLORS.overlay,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  modalCard: {
+    backgroundColor: '#FFF',
+    borderRadius: 40, // Extreme roundness for modern modal feel
+    padding: 32,
+    alignItems: 'center', // Center everything inside modal
+  },
+  modalTitle: {
+    fontSize: 24,
+    color: COLORS.title,
+    fontWeight: '700',
+    fontFamily: Fonts.rounded,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    fontSize: 15,
+    color: COLORS.subtitle,
+    marginBottom: 24,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  modalForm: {
+    width: '100%',
+    gap: 16,
+    marginBottom: 24,
+  },
+  fieldGroup: {
+    gap: 8,
+    width: '100%',
+  },
+  fieldLabel: {
+    fontSize: 14,
+    color: COLORS.title,
+    fontWeight: '600',
+    marginLeft: 12, // Align with the rounded input inside
+  },
+  inputShell: {
+    height: 60,
+    borderRadius: 999, // Pill shape inputs
+    backgroundColor: COLORS.chip,
+    paddingHorizontal: 20,
+    justifyContent: 'center',
+  },
+  input: {
+    fontSize: 16,
+    color: COLORS.title,
+  },
+  checkInPhotoCard: {
+    gap: 12,
+  },
+  checkInPhotoPreview: {
+    width: '100%',
+    height: 180,
+    borderRadius: 24,
+    backgroundColor: COLORS.chip,
+  },
+  checkInPhotoActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  photoPickerButton: {
+    minHeight: 52,
+    borderRadius: 999,
+    backgroundColor: COLORS.greenSoft,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 18,
+  },
+  photoPickerButtonText: {
+    color: COLORS.green,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  photoRemoveButton: {
+    minHeight: 52,
+    borderRadius: 999,
+    backgroundColor: COLORS.pinkSoft,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 18,
+  },
+  photoRemoveButtonText: {
+    color: COLORS.error,
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

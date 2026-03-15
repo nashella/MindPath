@@ -1,5 +1,4 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import { onAuthStateChanged } from 'firebase/auth';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useState } from 'react';
@@ -17,11 +16,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import TimePickerModal from '@/components/time-picker-modal';
 import { Fonts } from '@/constants/theme';
 import {
+  getTodayDateKey,
   saveDailyTask,
+  subscribeToCaregiverCheckIn,
   subscribeToDailyTasks,
 } from '@/lib/firestore-data';
 import { formatFirebaseError } from '@/lib/firebase-errors';
-import { auth } from '@/lib/firebase';
+import { useLinkedAccount } from '@/lib/use-linked-account';
 
 const COLORS = {
   pageBackground: '#F0F4FA',
@@ -43,8 +44,9 @@ function getTaskAccent(index) {
 
 export default function DailyTaskScreen() {
   const router = useRouter();
-  const [userId, setUserId] = useState(auth.currentUser?.uid ?? null);
+  const todayKey = getTodayDateKey();
   const [tasks, setTasks] = useState([]);
+  const [activeCaregiver, setActiveCaregiver] = useState(null);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isTimePickerVisible, setIsTimePickerVisible] = useState(false);
   const [taskInput, setTaskInput] = useState('');
@@ -53,28 +55,35 @@ export default function DailyTaskScreen() {
   const [statusTone, setStatusTone] = useState('success');
   const [isSavingTask, setIsSavingTask] = useState(false);
   const [isLoadingTasks, setIsLoadingTasks] = useState(true);
+  const {
+    user,
+    userId,
+    patientId,
+    userProfile,
+    profileError,
+    isProfileLoading,
+  } = useLinkedAccount();
+  const resolvedCaregiverName =
+    activeCaregiver?.caregiverName?.trim() ||
+    user?.displayName?.trim() ||
+    userProfile?.displayName?.trim() ||
+    userProfile?.email?.trim() ||
+    user?.email?.trim() ||
+    'Caregiver';
 
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      setUserId(user?.uid ?? null);
-    });
-
-    return unsubscribeAuth;
-  }, []);
-
-  useEffect(() => {
-    if (!userId) {
+    if (!patientId) {
       setTasks([]);
-      setIsLoadingTasks(false);
+      setIsLoadingTasks(isProfileLoading);
       return undefined;
     }
 
     setIsLoadingTasks(true);
 
     return subscribeToDailyTasks(
-      userId,
+      patientId,
       (items) => {
-        setTasks(items);
+        setTasks(items.filter((item) => (item.dateKey ?? todayKey) === todayKey));
         setIsLoadingTasks(false);
       },
       (error) => {
@@ -86,7 +95,25 @@ export default function DailyTaskScreen() {
         setIsLoadingTasks(false);
       }
     );
-  }, [userId]);
+  }, [isProfileLoading, patientId, todayKey]);
+
+  useEffect(() => {
+    if (!patientId) {
+      setActiveCaregiver(null);
+      return undefined;
+    }
+
+    return subscribeToCaregiverCheckIn(
+      patientId,
+      todayKey,
+      (checkIn) => {
+        setActiveCaregiver(checkIn);
+      },
+      (error) => {
+        console.error('Daily task caregiver check-in load failed', error);
+      }
+    );
+  }, [patientId, todayKey]);
 
   const openAddModal = () => {
     setTaskInput('');
@@ -110,18 +137,20 @@ export default function DailyTaskScreen() {
       return;
     }
 
-    if (!userId) {
+    if (!userId || !patientId) {
       setStatusTone('error');
-      setStatusMessage('Sign in again before adding a daily task.');
+      setStatusMessage(profileError || 'Link this account to a patient before adding tasks.');
       return;
     }
 
     setIsSavingTask(true);
 
     try {
-      await saveDailyTask(userId, {
+      await saveDailyTask(patientId, userId, {
         title: trimmedTask,
         time: selectedTaskTime,
+        dateKey: todayKey,
+        caregiverName: resolvedCaregiverName,
       });
 
       setTaskInput('');
@@ -172,7 +201,7 @@ export default function DailyTaskScreen() {
             <View style={styles.summaryCard}>
               <Text style={styles.summaryTitle}>Tasks for today</Text>
               <Text style={styles.summarySubtitle}>
-                Add caregiver tasks and assign a real time for each one.
+                Add tasks for {todayKey}. The active caregiver for today is {activeCaregiver?.caregiverName ?? 'not checked in yet'}, but tasks can still save before check-in.
               </Text>
             </View>
 
@@ -210,7 +239,7 @@ export default function DailyTaskScreen() {
               ) : (
                 <View style={styles.emptyCard}>
                   <Text style={styles.emptyTitle}>No daily tasks yet</Text>
-                  <Text style={styles.emptyText}>Use the plus button to add the first task for this caregiver.</Text>
+                  <Text style={styles.emptyText}>Use the plus button after check-in to add the first task for today.</Text>
                 </View>
               )}
             </View>
@@ -238,6 +267,12 @@ export default function DailyTaskScreen() {
             <Text style={styles.modalTitle}>Add daily task</Text>
             <Text style={styles.modalSubtitle}>Type the task and pick the time it should be done.</Text>
 
+            {!activeCaregiver?.caregiverName ? (
+              <Text style={styles.modalHelperText}>
+                No caregiver check-in is active yet. This task will still save under your account.
+              </Text>
+            ) : null}
+
             <Pressable
               accessibilityRole="button"
               onPress={() => setIsTimePickerVisible(true)}
@@ -259,6 +294,16 @@ export default function DailyTaskScreen() {
               textAlignVertical="top"
               value={taskInput}
             />
+
+            {statusMessage ? (
+              <Text
+                style={[
+                  styles.modalStatusText,
+                  statusTone === 'error' && styles.modalStatusTextError,
+                ]}>
+                {statusMessage}
+              </Text>
+            ) : null}
 
             <View style={styles.modalActions}>
               <Pressable accessibilityRole="button" onPress={closeAddModal} style={styles.modalCancelButton}>
@@ -544,6 +589,12 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontWeight: '500',
   },
+  modalHelperText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: COLORS.blue,
+    fontWeight: '600',
+  },
   timeSelectButton: {
     minHeight: 58,
     borderRadius: 18,
@@ -583,6 +634,15 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 22,
     color: COLORS.textPrimary,
+  },
+  modalStatusText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: COLORS.green,
+    fontWeight: '700',
+  },
+  modalStatusTextError: {
+    color: COLORS.danger,
   },
   modalActions: {
     flexDirection: 'row',

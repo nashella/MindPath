@@ -21,7 +21,6 @@ export default function ScheduleScreen() {
   const { schedule, updateScheduleItem } = usePatientContext();
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const itemAnimations = useRef(schedule.map(() => new Animated.Value(0))).current;
 
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -29,18 +28,7 @@ export default function ScheduleScreen() {
       duration: 280,
       useNativeDriver: true,
     }).start();
-
-    Animated.stagger(
-      45,
-      itemAnimations.map((animation) =>
-        Animated.timing(animation, {
-          toValue: 1,
-          duration: 260,
-          useNativeDriver: true,
-        })
-      )
-    ).start();
-  }, [fadeAnim, itemAnimations]);
+  }, [fadeAnim]);
 
   const getStatusIcon = (status: 'completed' | 'current' | 'upcoming') => {
     if (status === 'completed') {
@@ -98,23 +86,12 @@ export default function ScheduleScreen() {
             ))}
           </View>
 
-          {schedule.map((item, index) => (
-            <Animated.View
+          {schedule.map((item) => (
+            <View
               key={item.id}
               style={[
                 styles.card,
                 item.status === 'current' && styles.currentCard,
-                {
-                  opacity: itemAnimations[index],
-                  transform: [
-                    {
-                      translateX: itemAnimations[index].interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [-16, 0],
-                      }),
-                    },
-                  ],
-                },
               ]}>
               <Pressable
                 accessibilityRole="button"
@@ -137,6 +114,22 @@ export default function ScheduleScreen() {
                   {item.activity}
                 </Text>
                 <Text style={styles.timeText}>{item.time}</Text>
+                <View style={styles.metaRow}>
+                  <Text style={styles.sourceText}>
+                    {item.source === 'medication' ? 'Medication' : 'Daily task'}
+                  </Text>
+                  {item.urgent ? (
+                    <View style={styles.urgentBadge}>
+                      <MaterialCommunityIcons
+                        color="#A04B1A"
+                        name="alert-circle-outline"
+                        size={14}
+                      />
+                      <Text style={styles.urgentText}>Urgent</Text>
+                    </View>
+                  ) : null}
+                </View>
+                {item.note ? <Text style={styles.noteText}>{item.note}</Text> : null}
               </View>
 
               {item.status !== 'completed' ? (
@@ -151,7 +144,7 @@ export default function ScheduleScreen() {
                   />
                 </Pressable>
               ) : null}
-            </Animated.View>
+            </View>
           ))}
         </ScrollView>
       </Animated.View>
@@ -247,6 +240,38 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: PATIENT_COLORS.blue,
     fontWeight: '700',
+  },
+  metaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+  },
+  sourceText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: PATIENT_COLORS.textSecondary,
+    fontWeight: '700',
+  },
+  urgentBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: '#FFF1E7',
+  },
+  urgentText: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: '#A04B1A',
+    fontWeight: '800',
+  },
+  noteText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: PATIENT_COLORS.textSecondary,
   },
   completeButton: {
     width: 34,

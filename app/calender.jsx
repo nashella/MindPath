@@ -1,5 +1,4 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import { onAuthStateChanged } from 'firebase/auth';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -21,7 +20,7 @@ import {
   subscribeToCalendarEvents,
 } from '@/lib/firestore-data';
 import { formatFirebaseError } from '@/lib/firebase-errors';
-import { auth } from '@/lib/firebase';
+import { useLinkedAccount } from '@/lib/use-linked-account';
 
 const COLORS = {
   background: '#F7F9FC',
@@ -177,7 +176,6 @@ function buildEventRange(formattedTime) {
 export default function CalenderScreen() {
   const router = useRouter();
   const [selectedDay, setSelectedDay] = useState(2);
-  const [userId, setUserId] = useState(auth.currentUser?.uid ?? null);
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [isTimePickerVisible, setIsTimePickerVisible] = useState(false);
@@ -187,26 +185,19 @@ export default function CalenderScreen() {
   const [statusTone, setStatusTone] = useState('success');
   const [isLoadingEvents, setIsLoadingEvents] = useState(true);
   const [isSavingTask, setIsSavingTask] = useState(false);
+  const { userId, patientId, profileError, isProfileLoading } = useLinkedAccount();
 
   useEffect(() => {
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
-      setUserId(user?.uid ?? null);
-    });
-
-    return unsubscribeAuth;
-  }, []);
-
-  useEffect(() => {
-    if (!userId) {
+    if (!patientId) {
       setCalendarEvents([]);
-      setIsLoadingEvents(false);
+      setIsLoadingEvents(isProfileLoading);
       return undefined;
     }
 
     setIsLoadingEvents(true);
 
     return subscribeToCalendarEvents(
-      userId,
+      patientId,
       (items) => {
         setCalendarEvents(items);
         setIsLoadingEvents(false);
@@ -220,7 +211,7 @@ export default function CalenderScreen() {
         setIsLoadingEvents(false);
       }
     );
-  }, [userId]);
+  }, [isProfileLoading, patientId]);
 
   const eventsByDate = useMemo(() => {
     return calendarEvents.reduce((groupedEvents, eventItem) => {
@@ -262,9 +253,9 @@ export default function CalenderScreen() {
       return;
     }
 
-    if (!userId) {
+    if (!userId || !patientId) {
       setStatusTone('error');
-      setStatusMessage('Sign in again before adding a calendar task.');
+      setStatusMessage(profileError || 'Link this account to a patient before adding calendar tasks.');
       return;
     }
 
@@ -273,7 +264,7 @@ export default function CalenderScreen() {
     try {
       const eventTime = buildEventRange(selectedTaskTime);
 
-      await saveCalendarEvent(userId, {
+      await saveCalendarEvent(patientId, userId, {
         day: selectedDay,
         dateKey: selectedDateKey,
         title: trimmedTask,
