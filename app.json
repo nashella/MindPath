@@ -40,8 +40,16 @@
         "projectId": "840e1809-e474-4115-83db-9a0a5779c350"
       }
     },
+    "ios": {
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Allow MindPath to record reassuring voice notes for important people."
+      }
+    },
     "android": {
       "package": "com.deshawn54.mindpathapp",
+      "permissions": [
+        "RECORD_AUDIO"
+      ],
       "googleServicesFile": "./app/google-services.json",
       "config": {
         "googleMaps": {

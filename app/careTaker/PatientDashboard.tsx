@@ -13,20 +13,24 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Fonts } from '@/constants/theme';
-
 import { usePatientContext } from './patient-context';
 
+// Unified modern soft palette
 const COLORS = {
   background: '#FAFAFA',
   title: '#1A1A2E',
-  subtitle: '#6B6B80',
+  subtitle: '#6B6B80', 
   chip: '#F4F4F6',
   white: '#FFFFFF',
+  
+  // Primary Accents
   blue: '#4A90D9',
   green: '#6DBF8A',
   pink: '#D887A6',
   purple: '#B786F7',
   orange: '#E8925E',
+
+  // Soft Pastel Backgrounds for visual chunking
   blueSoft: '#EBF4FC',
   greenSoft: '#ECF9F1',
   pinkSoft: '#FDF2F6',
@@ -44,7 +48,7 @@ export default function PatientDashboard() {
     hasLinkedPatient,
     hasActiveCaregiver,
     isDeviating,
-    todayPlanItems,
+    schedule,
     updateScheduleItem,
   } = usePatientContext();
 
@@ -58,12 +62,24 @@ export default function PatientDashboard() {
     }).start();
   }, [fadeAnim]);
 
+  const nextTasks = schedule.filter((i) => i.status !== 'completed');
+  const [taskIndex, setTaskIndex] = React.useState(0);
+  const currentTask = nextTasks[taskIndex] ?? null;
+  const hasNext = taskIndex < nextTasks.length - 1;
+
+  useEffect(() => {
+    if (taskIndex > 0 && taskIndex >= nextTasks.length) {
+      setTaskIndex(Math.max(nextTasks.length - 1, 0));
+    }
+  }, [nextTasks.length, taskIndex]);
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <Animated.ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
         style={{ opacity: fadeAnim }}>
+
         <View style={styles.topBar}>
           <Text style={styles.appName}>MindPath</Text>
           <Pressable
@@ -72,60 +88,39 @@ export default function PatientDashboard() {
               await signOut(getAuth());
               router.replace('/');
             }}
-            style={({ pressed }) => [
-              styles.signOutButton,
-              pressed && styles.btnPressed,
-            ]}>
-            <MaterialCommunityIcons
-              color={COLORS.subtitle}
-              name="logout-variant"
-              size={18}
-            />
+            style={({ pressed }) => [styles.signOutButton, pressed && styles.btnPressed]}>
+            <MaterialCommunityIcons name="logout-variant" size={18} color={COLORS.subtitle} />
             <Text style={styles.signOutButtonText}>Sign Out</Text>
           </Pressable>
         </View>
 
+        {/* ── Section 1: Identity (Soft Purple Card) ── */}
         <View style={[styles.softCard, { backgroundColor: COLORS.purpleSoft }]}>
           <View style={styles.cardHeader}>
-            <MaterialCommunityIcons
-              color={COLORS.purple}
-              name="face-man-profile"
-              size={28}
-            />
-            <Text style={[styles.eyebrow, { color: COLORS.purple }]}>
-              Who You Are
-            </Text>
+            <MaterialCommunityIcons name="face-man-profile" size={28} color={COLORS.purple} />
+            <Text style={[styles.eyebrow, { color: COLORS.purple }]}>Hello!!</Text>
           </View>
-          <Text style={styles.h1}>You are {patientName}.</Text>
+          <Text style={styles.h1}>{patientName}.</Text>
           <Text style={styles.subhead}>
             {patientAge > 0
-              ? `You are ${patientAge} years old.`
-              : 'Your caregiver can add your age in setup.'}
+              ? `${patientAge} years old`
+              : ''}
           </Text>
           {!hasLinkedPatient ? (
             <View style={styles.calloutBox}>
-              <MaterialCommunityIcons
-                color={COLORS.purple}
-                name="link-variant"
-                size={20}
-              />
+              <MaterialCommunityIcons name="link-variant" size={20} color={COLORS.purple} />
               <Text style={styles.calloutText}>
-                Ask a caregiver for your join code to connect your account.
+                Ask a caregiver for help
               </Text>
             </View>
           ) : null}
         </View>
 
+        {/* ── Section 2: Caretaker (Soft Green Card) ── */}
         <View style={[styles.softCard, { backgroundColor: COLORS.greenSoft }]}>
           <View style={styles.cardHeader}>
-            <MaterialCommunityIcons
-              color={COLORS.green}
-              name="hand-heart"
-              size={28}
-            />
-            <Text style={[styles.eyebrow, { color: COLORS.green }]}>
-              Helping You Today
-            </Text>
+            <MaterialCommunityIcons name="hand-heart" size={28} color={COLORS.green} />
+            <Text style={[styles.eyebrow, { color: COLORS.green }]}>Helping You Today is</Text>
           </View>
 
           <View style={styles.careRow}>
@@ -134,11 +129,7 @@ export default function PatientDashboard() {
                 <Image source={{ uri: caregiverPhoto }} style={styles.photo} />
               ) : (
                 <View style={styles.photoPlaceholder}>
-                  <MaterialCommunityIcons
-                    color={COLORS.green}
-                    name="account"
-                    size={40}
-                  />
+                  <MaterialCommunityIcons name="account" size={40} color={COLORS.green} />
                 </View>
               )}
             </View>
@@ -146,129 +137,71 @@ export default function PatientDashboard() {
             <View style={styles.careInfo}>
               <Text style={styles.careName}>{caregiverName || 'No Caregiver'}</Text>
               <Text style={styles.careRole}>
-                {hasActiveCaregiver
-                  ? 'is here with you today.'
-                  : 'has not checked in yet today.'}
+                {hasActiveCaregiver ? '' : 'has not checked in yet today.'}
               </Text>
             </View>
           </View>
         </View>
 
+        {/* ── Section 3: Next task (Elevated White Card) ── */}
         <View style={styles.taskSection}>
-          <Text style={styles.sectionHeader}>What To Do Next</Text>
-          <Text style={styles.taskCounter}>
-            Today&apos;s plan from daily tasks, medications, and calendar events.
-          </Text>
+          <Text style={styles.sectionHeader}>Task</Text>
 
-          {todayPlanItems.length ? (
-            todayPlanItems.map((item) => {
-              const isDailyTask = item.source === 'daily-task';
-              const isMedication = item.source === 'medication';
-              const isActionable = item.source !== 'calendar-event';
-              const isCompleted = item.status === 'completed';
+          {currentTask ? (
+            <>
+              <Text style={styles.taskCounter}>
+                Task {taskIndex + 1} of {nextTasks.length}
+              </Text>
 
-              return (
-                <View
-                  key={item.id}
-                  style={[
-                    styles.planCard,
-                    isCompleted && styles.planCardCompleted,
-                  ]}>
-                  <View style={styles.planCardTopRow}>
-                    <View style={styles.timeBadge}>
-                      <MaterialCommunityIcons
-                        color={COLORS.blue}
-                        name="clock-outline"
-                        size={16}
-                      />
-                      <Text style={styles.timeTxt}>{item.time}</Text>
-                    </View>
-
-                    <View
-                      style={[
-                        styles.sourceBadge,
-                        isDailyTask
-                          ? styles.sourceBadgeBlue
-                          : isMedication
-                            ? styles.sourceBadgeOrange
-                            : styles.sourceBadgeGreen,
-                      ]}>
-                      <Text
-                        style={[
-                          styles.sourceBadgeText,
-                          isDailyTask
-                            ? styles.sourceBadgeTextBlue
-                            : isMedication
-                              ? styles.sourceBadgeTextOrange
-                              : styles.sourceBadgeTextGreen,
-                        ]}>
-                        {isDailyTask
-                          ? 'Daily Task'
-                          : isMedication
-                            ? 'Medication'
-                            : 'Calendar'}
-                      </Text>
-                    </View>
+              <View style={styles.taskCard}>
+                {currentTask.image ? (
+                  <Image
+                    source={typeof currentTask.image === 'string' ? { uri: currentTask.image } : currentTask.image}
+                    style={styles.taskImage}
+                  />
+                ) : (
+                  <View style={styles.taskImagePlaceholder}>
+                    <MaterialCommunityIcons name="image-outline" size={56} color={COLORS.blue} />
                   </View>
+                )}
 
-                  <Text
-                    style={[
-                      styles.planCardTitle,
-                      isCompleted && styles.completedActivityText,
-                    ]}>
-                    {item.title}
-                  </Text>
-
-                  {item.note ? (
-                    <Text style={styles.planCardNote}>{item.note}</Text>
-                  ) : null}
-
-                  {isActionable ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      disabled={isCompleted}
-                      onPress={() => {
-                        void updateScheduleItem(item.id, {
-                          status: 'completed',
-                        });
-                      }}
-                      style={({ pressed }) => [
-                        styles.inlineDoneButton,
-                        isCompleted && styles.inlineDoneButtonCompleted,
-                        pressed && !isCompleted && styles.btnPressed,
-                      ]}>
-                      <MaterialCommunityIcons
-                        color={isCompleted ? COLORS.green : COLORS.blue}
-                        name={
-                          isCompleted
-                            ? 'check-circle'
-                            : 'check-circle-outline'
-                        }
-                        size={18}
-                      />
-                      <Text
-                        style={[
-                          styles.inlineDoneButtonText,
-                          isCompleted &&
-                            styles.inlineDoneButtonTextCompleted,
-                        ]}>
-                        {isCompleted ? 'Done' : isMedication ? 'Mark Taken' : 'Mark Done'}
-                      </Text>
-                    </Pressable>
-                  ) : null}
+                <View style={styles.taskCardBody}>
+                  <View style={styles.taskMetaRow}>
+                    <View style={styles.timeBadge}>
+                      <MaterialCommunityIcons name="clock-outline" size={16} color={COLORS.blue} />
+                      <Text style={styles.timeTxt}>{currentTask.time}</Text>
+                    </View>
+                    
+                    {currentTask.urgent ? (
+                      <View style={styles.urgentBadge}>
+                        <MaterialCommunityIcons name="alert-circle" size={16} color={COLORS.orange} />
+                        <Text style={styles.urgentTxt}>Urgent</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  
+                  <Text style={styles.taskCardTitle}>{currentTask.activity}</Text>
+                  {currentTask.note ? <Text style={styles.taskCardNote}>{currentTask.note}</Text> : null}
                 </View>
-              );
-            })
+              </View>
+
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  updateScheduleItem(currentTask.id, { status: 'completed' });
+                  if (hasNext) setTaskIndex(0);
+                }}
+                style={({ pressed }) => [styles.doneBtn, pressed && styles.btnPressed]}>
+                <MaterialCommunityIcons name="check-circle" size={28} color={COLORS.white} />
+                <Text style={styles.doneBtnTxt}>
+                  {hasNext ? 'Done — show next task' : 'All done for today!'}
+                </Text>
+              </Pressable>
+            </>
           ) : (
             <View style={styles.allDoneCard}>
-              <MaterialCommunityIcons
-                color={COLORS.green}
-                name="calendar-heart"
-                size={48}
-              />
-              <Text style={styles.allDoneText}>
-                There is nothing scheduled for today yet.
-              </Text>
+              <MaterialCommunityIcons name="party-popper" size={48} color={COLORS.green} />
+              <Text style={styles.allDoneText}>You finished all task for today</Text>
             </View>
           )}
 
@@ -276,27 +209,18 @@ export default function PatientDashboard() {
             accessibilityRole="button"
             onPress={() => router.push('/patient/schedule')}
             style={styles.ghostBtn}>
-            <Text style={styles.ghostBtnTxt}>See full schedule</Text>
-            <MaterialCommunityIcons
-              color={COLORS.blue}
-              name="arrow-right"
-              size={20}
-            />
+            <Text style={styles.ghostBtnTxt}>Calender</Text>
+            <MaterialCommunityIcons name="arrow-right" size={20} color={COLORS.blue} />
           </Pressable>
         </View>
 
+        {/* ── Section 4: Help (Soft Pink Area) ── */}
         <View style={[styles.softCard, { backgroundColor: COLORS.pinkSoft }]}>
           <View style={styles.cardHeader}>
-            <MaterialCommunityIcons
-              color={COLORS.pink}
-              name="lifebuoy"
-              size={28}
-            />
-            <Text style={[styles.eyebrow, { color: COLORS.pink }]}>
-              Need Help?
-            </Text>
+            <MaterialCommunityIcons name="lifebuoy" size={28} color={COLORS.pink} />
+            <Text style={[styles.eyebrow, { color: COLORS.pink }]}>Need Help?</Text>
           </View>
-
+          
           <Text style={styles.h2}>
             {isDeviating ? 'Let us guide you.' : 'We are here for you.'}
           </Text>
@@ -306,38 +230,20 @@ export default function PatientDashboard() {
               accessibilityRole="button"
               onPress={() => router.push('/patient/guidance')}
               style={({ pressed }) => [
-                styles.primaryPillBtn,
+                styles.primaryPillBtn, 
                 { backgroundColor: isDeviating ? COLORS.orange : COLORS.pink },
-                pressed && styles.btnPressed,
+                pressed && styles.btnPressed
               ]}>
-              <MaterialCommunityIcons
-                color={COLORS.white}
-                name="navigation-variant"
-                size={24}
-              />
+              <MaterialCommunityIcons name="navigation-variant" size={24} color={COLORS.white} />
               <Text style={styles.primaryPillBtnTxt}>
-                {isDeviating ? 'Show Directions Home' : 'Open Guidance'}
+                {isDeviating ? 'Show Directions Home' : 'Guidance'}
               </Text>
             </Pressable>
 
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => router.push('/patient/face-scan')}
-              style={({ pressed }) => [
-                styles.secondaryPillBtn,
-                pressed && styles.btnPressed,
-              ]}>
-              <MaterialCommunityIcons
-                color={COLORS.pink}
-                name="account-search"
-                size={24}
-              />
-              <Text style={styles.secondaryPillBtnTxt}>
-                See Familiar Faces
-              </Text>
-            </Pressable>
+
           </View>
         </View>
+
       </Animated.ScrollView>
     </SafeAreaView>
   );
@@ -351,7 +257,7 @@ const styles = StyleSheet.create({
   scroll: {
     paddingHorizontal: 20,
     paddingBottom: 40,
-    gap: 20,
+    gap: 20, 
   },
   topBar: {
     flexDirection: 'row',
@@ -383,6 +289,8 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.subtitle,
   },
+
+  // Soft Chunking Cards
   softCard: {
     borderRadius: 32,
     padding: 24,
@@ -395,7 +303,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   eyebrow: {
-    fontSize: 16,
+    fontSize: 16, 
     fontWeight: '800',
     textTransform: 'uppercase',
     letterSpacing: 1,
@@ -441,6 +349,8 @@ const styles = StyleSheet.create({
     color: COLORS.purple,
     fontWeight: '700',
   },
+
+  // Caregiver Section
   careRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -482,6 +392,8 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     opacity: 0.8,
   },
+
+  // Tasks Section
   taskSection: {
     paddingVertical: 8,
     gap: 12,
@@ -497,25 +409,37 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.subtitle,
   },
-  planCard: {
+  taskCard: {
     backgroundColor: COLORS.white,
-    borderRadius: 28,
-    padding: 20,
-    gap: 12,
+    borderRadius: 32,
+    overflow: 'hidden',
     shadowColor: COLORS.title,
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.04,
     shadowRadius: 24,
     elevation: 3,
   },
-  planCardCompleted: {
-    opacity: 0.76,
+  taskImage: {
+    width: '100%',
+    height: 220, 
   },
-  planCardTopRow: {
-    flexDirection: 'row',
+  taskImagePlaceholder: {
+    width: '100%',
+    height: 220,
+    backgroundColor: COLORS.blueSoft,
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+  },
+  taskCardBody: {
+    padding: 24,
+    gap: 12,
+  },
+  taskMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
+    alignItems: 'center',
+    marginBottom: 4,
   },
   timeBadge: {
     flexDirection: 'row',
@@ -531,77 +455,55 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: COLORS.blue,
   },
-  sourceBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+  urgentBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 999,
-  },
-  sourceBadgeBlue: {
-    backgroundColor: COLORS.purpleSoft,
-  },
-  sourceBadgeGreen: {
-    backgroundColor: COLORS.greenSoft,
-  },
-  sourceBadgeOrange: {
     backgroundColor: COLORS.orangeSoft,
   },
-  sourceBadgeText: {
-    fontSize: 12,
+  urgentTxt: {
+    fontSize: 15,
     fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  sourceBadgeTextBlue: {
-    color: COLORS.purple,
-  },
-  sourceBadgeTextGreen: {
-    color: COLORS.green,
-  },
-  sourceBadgeTextOrange: {
     color: COLORS.orange,
   },
-  planCardTitle: {
-    fontSize: 24,
-    lineHeight: 30,
+  taskCardTitle: {
+    fontSize: 28,
+    lineHeight: 34,
     fontWeight: '800',
     color: COLORS.title,
     fontFamily: Fonts.rounded,
   },
-  completedActivityText: {
-    color: COLORS.subtitle,
-    textDecorationLine: 'line-through',
-  },
-  planCardNote: {
-    fontSize: 16,
-    lineHeight: 23,
+  taskCardNote: {
+    fontSize: 18,
+    lineHeight: 26,
     color: COLORS.subtitle,
     fontWeight: '500',
   },
-  inlineDoneButton: {
-    alignSelf: 'flex-start',
+
+  // Done Button
+  doneBtn: {
+    minHeight: 72, 
+    borderRadius: 999,
+    backgroundColor: COLORS.blue,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    backgroundColor: COLORS.blueSoft,
-  },
-  inlineDoneButtonCompleted: {
-    backgroundColor: COLORS.greenSoft,
-  },
-  inlineDoneButtonText: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: COLORS.blue,
-  },
-  inlineDoneButtonTextCompleted: {
-    color: COLORS.green,
+    justifyContent: 'center',
+    gap: 12,
+    marginTop: 8,
   },
   btnPressed: {
     opacity: 0.85,
     transform: [{ scale: 0.98 }],
   },
+  doneBtnTxt: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: COLORS.white,
+  },
+  
   allDoneCard: {
     backgroundColor: COLORS.white,
     borderRadius: 32,
@@ -616,6 +518,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textAlign: 'center',
   },
+
   ghostBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -628,6 +531,8 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.blue,
   },
+
+  // Help Section Buttons
   helpButtonStack: {
     gap: 12,
     marginTop: 8,

@@ -1,1 +1,7 @@
-export { default } from '../careTaker/MemoriesScreen';
+import React from 'react';
+
+import MemoriesScreen from '../careTaker/MemoriesScreen';
+
+export default function PatientMemoriesRoute() {
+  return <MemoriesScreen />;
+}

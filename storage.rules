@@ -26,6 +26,11 @@ service firebase.storage {
       allow write: if isCaregiverForPatient(patientId);
     }
 
+    match /patients/{patientId}/importantPeople/{mediaType}/{fileName} {
+      allow read: if isLinkedToPatient(patientId);
+      allow write: if isCaregiverForPatient(patientId);
+    }
+
     match /patients/{patientId}/medications/{fileName} {
       allow read: if isLinkedToPatient(patientId);
       allow write: if isCaregiverForPatient(patientId);

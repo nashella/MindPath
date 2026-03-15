@@ -312,7 +312,7 @@ export default function CaregiverDashboard() {
             </View>
           ) : null}
           
-          <Text style={styles.sectionHeader}>What would you like to do?</Text>
+          <Text style={styles.sectionHeader}>Next Task</Text>
 
           {/* List-style overview items matching the first reference image */}
           <View style={styles.actionList}>

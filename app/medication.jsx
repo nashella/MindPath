@@ -166,7 +166,7 @@ export default function MedicationScreen() {
 
       setPhotoUri(result.assets[0].uri);
       setStatusTone('success');
-      setStatusMessage('Medication photo added.');
+      setStatusMessage('');
     } catch (error) {
       console.error('Medication camera capture failed', error);
       setStatusTone('error');

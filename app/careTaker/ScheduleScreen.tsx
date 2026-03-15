@@ -137,17 +137,14 @@ export default function ScheduleScreen() {
             </Pressable>
             <View style={styles.headerCopy}>
               <Text style={styles.headerTitle}>Monthly Schedule</Text>
-              <Text style={styles.headerSubtitle}>
-                View the events your caregiver added for this month.
-              </Text>
             </View>
           </View>
 
           <Text style={styles.monthTitle}>{getMonthLabel(anchorDate)}</Text>
 
           <View style={styles.weekRow}>
-            {WEEKDAYS.map((dayLabel) => (
-              <Text key={dayLabel} style={styles.weekdayText}>
+            {WEEKDAYS.map((dayLabel, index) => (
+              <Text key={`${dayLabel}-${index}`} style={styles.weekdayText}>
                 {dayLabel}
               </Text>
             ))}
@@ -198,14 +195,8 @@ export default function ScheduleScreen() {
                 <Text style={styles.agendaDayLabel}>{agendaMeta.weekday}</Text>
               </View>
 
-              <View style={styles.readOnlyBadge}>
-                <MaterialCommunityIcons
-                  color={PATIENT_COLORS.green}
-                  name="eye-outline"
-                  size={18}
-                />
-                <Text style={styles.readOnlyText}>Read Only</Text>
-              </View>
+             
+            
             </View>
 
             <View style={styles.eventsList}>
@@ -232,9 +223,6 @@ export default function ScheduleScreen() {
               ) : (
                 <View style={styles.emptyState}>
                   <Text style={styles.emptyStateTitle}>Nothing set for this day</Text>
-                  <Text style={styles.emptyStateText}>
-                    Tap another date to view the events your caregiver added.
-                  </Text>
                 </View>
               )}
             </View>

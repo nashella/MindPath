@@ -3,13 +3,16 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as Speech from 'expo-speech';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Modal,
+  PermissionsAndroid,
+  Platform,
   Pressable,
   ScrollView,
+  Switch,
   StyleSheet,
   Text,
   TextInput,
@@ -27,17 +30,27 @@ import {
   updatePatientMemory,
 } from '@/lib/firestore-data';
 import { formatFirebaseError } from '@/lib/firebase-errors';
-import { deleteStorageFile, uploadMemoryPhoto } from '@/lib/storage-data';
+import {
+  deleteStorageFile,
+  uploadMemoryPhoto,
+  uploadMemoryVoiceNote,
+} from '@/lib/storage-data';
 import { useLinkedAccount } from '@/lib/use-linked-account';
+
+type AVPlaybackStatus = import('expo-av').AVPlaybackStatus;
+type ExpoAudioApi = (typeof import('expo-av'))['Audio'];
 
 type MemoryRecord = {
   id: string;
+  category?: string;
   title?: string;
   relationship?: string;
   description?: string;
   narration?: string;
   imageUrl?: string;
   imagePath?: string;
+  voiceNoteUrl?: string;
+  voiceNotePath?: string;
   createdAtMs?: number;
 };
 
@@ -69,6 +82,17 @@ const COLORS = {
   
   overlay: 'rgba(26, 26, 46, 0.4)',
 };
+
+const MEMORY_AUDIO_PREVIEW_KEY = 'memory-audio-preview';
+
+async function loadAudioApi() {
+  try {
+    const expoAv = await import('expo-av');
+    return expoAv.Audio as ExpoAudioApi;
+  } catch {
+    return null;
+  }
+}
 
 function formatMemoryDate(createdAtMs?: number) {
   if (!createdAtMs) {
@@ -112,6 +136,13 @@ function buildNarration(memory: Pick<MemoryRecord, 'title' | 'relationship' | 'd
   return parts.join(' ').trim() || 'This is a special memory saved for you.';
 }
 
+function formatDuration(durationMs: number) {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+  const seconds = String(totalSeconds % 60).padStart(2, '0');
+  return `${minutes}:${seconds}`;
+}
+
 export default function MemoriesScreen() {
   const { width } = useWindowDimensions();
   const { patientId, role, userId, isProfileLoading, profileError } = useLinkedAccount();
@@ -121,24 +152,33 @@ export default function MemoriesScreen() {
   const tileWidth = Math.max(Math.floor((width - 48 - tileGap * (columns - 1)) / columns), 140);
   const tileHeight = Math.round(tileWidth * 1.15);
 
-  const [patientRecord, setPatientRecord] = useState<PatientRecord>(null);
+  const [, setPatientRecord] = useState<PatientRecord>(null);
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [isPatientLoading, setIsPatientLoading] = useState(true);
   const [isMemoriesLoading, setIsMemoriesLoading] = useState(true);
   const [isComposerVisible, setIsComposerVisible] = useState(false);
   const [selectedMemory, setSelectedMemory] = useState<MemoryRecord | null>(null);
   const [editingMemory, setEditingMemory] = useState<MemoryRecord | null>(null);
+  const [activeCategory, setActiveCategory] = useState<'general' | 'important'>('general');
+  const [isImportantMemory, setIsImportantMemory] = useState(false);
   
   const [memoryTitle, setMemoryTitle] = useState('');
   const [memoryRelationship, setMemoryRelationship] = useState('');
   const [memoryDescription, setMemoryDescription] = useState('');
   const [selectedImageUri, setSelectedImageUri] = useState('');
+  const [selectedVoiceNoteUri, setSelectedVoiceNoteUri] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
   const [statusTone, setStatusTone] = useState<'success' | 'error'>('success');
   const [isPickingImage, setIsPickingImage] = useState(false);
   const [isSavingMemory, setIsSavingMemory] = useState(false);
   const [isDeletingMemory, setIsDeletingMemory] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isRecordingVoiceNote, setIsRecordingVoiceNote] = useState(false);
+  const [recordingDurationMs, setRecordingDurationMs] = useState(0);
+  const [activeVoicePlaybackKey, setActiveVoicePlaybackKey] = useState<string | null>(null);
+  const playbackKeyRef = useRef<string | null>(null);
+  const audioRecordingRef = useRef<any>(null);
+  const audioSoundRef = useRef<any>(null);
 
   useEffect(() => {
     if (!patientId) {
@@ -185,6 +225,21 @@ export default function MemoriesScreen() {
   useEffect(() => {
     return () => {
       Speech.stop();
+      void (async () => {
+        if (audioRecordingRef.current) {
+          try {
+            await audioRecordingRef.current.stopAndUnloadAsync();
+          } catch {}
+          audioRecordingRef.current = null;
+        }
+
+        if (audioSoundRef.current) {
+          try {
+            await audioSoundRef.current.unloadAsync();
+          } catch {}
+          audioSoundRef.current = null;
+        }
+      })();
     };
   }, []);
 
@@ -197,43 +252,123 @@ export default function MemoriesScreen() {
   const selectedNarration = useMemo(() => {
     return selectedMemory ? buildNarration(selectedMemory) : '';
   }, [selectedMemory]);
+  const filteredMemories = useMemo(() => {
+    return memories.filter((memory) => {
+      const category = String(memory.category ?? 'general').trim() || 'general';
+      return activeCategory === 'important' ? category === 'important' : category !== 'important';
+    });
+  }, [activeCategory, memories]);
 
   const visibleStatusMessage = statusMessage || profileError;
   const statusIsError = statusMessage ? statusTone === 'error' : Boolean(profileError);
-  const emptyTitle = patientId ? 'No memories yet' : 'No linked patient yet';
+  const emptyTitle = patientId
+    ? activeCategory === 'important'
+      ? 'No important people yet'
+      : 'No memories yet'
+    : 'No linked patient yet';
   const emptyText = patientId
-    ? isCaregiver
-      ? 'Add family photos with relationship details and a clear description.'
-      : 'Your caregiver can add family photos here. Tap one to hear it read aloud.'
+    ? activeCategory === 'important'
+      ? isCaregiver
+        ? 'Turn on Important in Add Memory and save a photo with a recorded audio note.'
+        : 'Tap an important person photo to hear the caregiver’s recorded audio.'
+      : isCaregiver
+        ? 'Add general memories here.'
+        : 'General memory photos will show here.'
     : 'Link a patient account first so this shared album knows where to save memories.';
+  const sectionHint =
+    activeCategory === 'important'
+      ? isCaregiver
+        ? 'Important people use photo + recorded audio only'
+        : 'Tap a photo to play recorded audio'
+      : 'Add general memories here';
 
-  const handleCloseComposer = () => {
+  const stopAudioPlayback = async () => {
+    playbackKeyRef.current = null;
+    setActiveVoicePlaybackKey(null);
+    if (!audioSoundRef.current) {
+      return;
+    }
+
+    try {
+      await audioSoundRef.current.stopAsync();
+    } catch {}
+
+    try {
+      await audioSoundRef.current.unloadAsync();
+    } catch {}
+
+    audioSoundRef.current = null;
+  };
+
+  const stopVoiceRecording = async () => {
+    const recording = audioRecordingRef.current;
+    audioRecordingRef.current = null;
+
+    if (!recording) {
+      setIsRecordingVoiceNote(false);
+      return '';
+    }
+
+    try {
+      await recording.stopAndUnloadAsync();
+      const audioApi = await loadAudioApi();
+      if (audioApi) {
+        await audioApi.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: false,
+          shouldDuckAndroid: true,
+        });
+      }
+      return recording.getURI() ?? '';
+    } catch {
+      return '';
+    } finally {
+      setIsRecordingVoiceNote(false);
+    }
+  };
+
+  const handleCloseComposer = async () => {
+    if (isRecordingVoiceNote) {
+      await stopVoiceRecording();
+    }
+    await stopAudioPlayback();
     setIsComposerVisible(false);
     setEditingMemory(null);
+    setIsImportantMemory(false);
     setMemoryTitle('');
     setMemoryRelationship('');
     setMemoryDescription('');
     setSelectedImageUri('');
+    setSelectedVoiceNoteUri('');
+    setRecordingDurationMs(0);
   };
 
   const handleOpenComposer = () => {
     setEditingMemory(null);
+    setIsImportantMemory(activeCategory === 'important');
     setMemoryTitle('');
     setMemoryRelationship('');
     setMemoryDescription('');
     setSelectedImageUri('');
+    setSelectedVoiceNoteUri('');
+    setRecordingDurationMs(0);
     setIsComposerVisible(true);
   };
 
-  const handleStartEditingMemory = (memory: MemoryRecord) => {
+  const handleStartEditingMemory = async (memory: MemoryRecord) => {
     Speech.stop();
     setIsSpeaking(false);
+    await stopAudioPlayback();
     setSelectedMemory(null);
     setEditingMemory(memory);
+    setIsImportantMemory(String(memory.category ?? 'general').trim() === 'important');
     setMemoryTitle(memory.title ?? '');
     setMemoryRelationship(memory.relationship ?? '');
     setMemoryDescription(memory.description ?? '');
     setSelectedImageUri(memory.imageUrl ?? '');
+    setSelectedVoiceNoteUri(memory.voiceNoteUrl ?? '');
+    setRecordingDurationMs(0);
     setIsComposerVisible(true);
   };
 
@@ -264,11 +399,167 @@ export default function MemoriesScreen() {
     }
   };
 
+  const ensureAudioPermission = async () => {
+    const audioApi = await loadAudioApi();
+    if (!audioApi) {
+      setStatusTone('error');
+      setStatusMessage('Audio notes need a fresh app build before recording can work.');
+      return false;
+    }
+
+    const permissionResponse = await audioApi.requestPermissionsAsync();
+
+    if (permissionResponse.granted) {
+      return true;
+    }
+
+    if (Platform.OS === 'android') {
+      const fallbackResponse = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        {
+          title: 'Microphone permission',
+          message: 'MindPath needs microphone access to record an audio note.',
+          buttonPositive: 'Allow',
+        }
+      );
+
+      return fallbackResponse === PermissionsAndroid.RESULTS.GRANTED;
+    }
+
+    return false;
+  };
+
+  const handleToggleRecording = async () => {
+    if (!isCaregiver) {
+      return;
+    }
+
+    const audioApi = await loadAudioApi();
+    if (!audioApi) {
+      setStatusTone('error');
+      setStatusMessage('Audio notes need a fresh app build before recording can work.');
+      return;
+    }
+
+    if (isRecordingVoiceNote) {
+      const recordedUri = await stopVoiceRecording();
+      if (recordedUri) {
+        setSelectedVoiceNoteUri(recordedUri);
+        setStatusTone('success');
+        setStatusMessage('Audio note recorded and ready to save.');
+      } else {
+        setStatusTone('error');
+        setStatusMessage('Could not finish recording this audio note.');
+      }
+      return;
+    }
+
+    const hasPermission = await ensureAudioPermission();
+    if (!hasPermission) {
+      setStatusTone('error');
+      setStatusMessage('Microphone permission is needed to record audio.');
+      return;
+    }
+
+    await stopAudioPlayback();
+    setRecordingDurationMs(0);
+
+    try {
+      await audioApi.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+      });
+
+      const recording = new audioApi.Recording();
+
+      recording.setOnRecordingStatusUpdate((status) => {
+        if (status.isRecording) {
+          setRecordingDurationMs(Number(status.durationMillis ?? 0));
+        }
+      });
+
+      await recording.prepareToRecordAsync(audioApi.RecordingOptionsPresets.HIGH_QUALITY);
+      await recording.startAsync();
+      audioRecordingRef.current = recording;
+      setIsRecordingVoiceNote(true);
+      setStatusTone('success');
+      setStatusMessage('Recording audio note...');
+    } catch {
+      setStatusTone('error');
+      setStatusMessage('Could not start the microphone recording.');
+    }
+  };
+
+  const handlePlayAudio = async (uri: string, playbackKey: string) => {
+    if (!uri) {
+      setStatusTone('error');
+      setStatusMessage('No recorded audio is saved for this photo yet.');
+      return;
+    }
+
+    const audioApi = await loadAudioApi();
+    if (!audioApi) {
+      setStatusTone('error');
+      setStatusMessage('Audio playback needs a fresh app build before it can work.');
+      return;
+    }
+
+    if (isRecordingVoiceNote) {
+      await stopVoiceRecording();
+    }
+
+    if (playbackKeyRef.current === playbackKey) {
+      await stopAudioPlayback();
+      return;
+    }
+
+    await stopAudioPlayback();
+
+    try {
+      await audioApi.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+      });
+
+      playbackKeyRef.current = playbackKey;
+      setActiveVoicePlaybackKey(playbackKey);
+      const { sound } = await audioApi.Sound.createAsync({ uri }, { shouldPlay: true });
+
+      audioSoundRef.current = sound;
+      sound.setOnPlaybackStatusUpdate((status: AVPlaybackStatus) => {
+        if (status.isLoaded && status.didJustFinish) {
+          playbackKeyRef.current = null;
+          setActiveVoicePlaybackKey(null);
+          void sound.unloadAsync();
+          audioSoundRef.current = null;
+        }
+      });
+    } catch {
+      playbackKeyRef.current = null;
+      setActiveVoicePlaybackKey(null);
+      setStatusTone('error');
+      setStatusMessage('Could not play this audio note.');
+    }
+  };
+
   const handleSaveMemory = async () => {
     if (!isCaregiver || !userId || !patientId) return;
-    if (!selectedImageUri || !memoryTitle.trim() || !memoryRelationship.trim() || !memoryDescription.trim()) {
+    if (
+      !selectedImageUri ||
+      (isImportantMemory
+        ? !selectedVoiceNoteUri
+        : !memoryTitle.trim() || !memoryRelationship.trim() || !memoryDescription.trim())
+    ) {
       setStatusTone('error');
-      setStatusMessage('Please choose a photo and complete all fields.');
+      setStatusMessage(
+        isImportantMemory
+          ? 'Please choose a photo and record audio for this important person.'
+          : 'Please choose a photo and complete all fields.'
+      );
       return;
     }
 
@@ -276,8 +567,12 @@ export default function MemoriesScreen() {
     try {
       let nextImageUrl = editingMemory?.imageUrl?.trim() ?? '';
       let nextImagePath = editingMemory?.imagePath?.trim() ?? '';
+      let nextVoiceNoteUrl = editingMemory?.voiceNoteUrl?.trim() ?? '';
+      let nextVoiceNotePath = editingMemory?.voiceNotePath?.trim() ?? '';
       const hasNewLocalImage =
         selectedImageUri && !/^https?:\/\//i.test(selectedImageUri);
+      const hasNewLocalVoiceNote =
+        selectedVoiceNoteUri && !/^https?:\/\//i.test(selectedVoiceNoteUri);
 
       if (hasNewLocalImage) {
         const uploadedPhoto = await uploadMemoryPhoto({
@@ -289,13 +584,26 @@ export default function MemoriesScreen() {
         nextImagePath = uploadedPhoto.imagePath;
       }
 
+      if (hasNewLocalVoiceNote) {
+        const uploadedVoiceNote = await uploadMemoryVoiceNote({
+          patientId,
+          userId,
+          uri: selectedVoiceNoteUri,
+        });
+        nextVoiceNoteUrl = uploadedVoiceNote.imageUrl;
+        nextVoiceNotePath = uploadedVoiceNote.imagePath;
+      }
+
       const payload = {
-        title: memoryTitle,
-        relationship: memoryRelationship,
-        description: memoryDescription,
-        narration: draftNarration,
+        category: isImportantMemory ? 'important' : 'general',
+        title: isImportantMemory ? '' : memoryTitle,
+        relationship: isImportantMemory ? '' : memoryRelationship,
+        description: isImportantMemory ? '' : memoryDescription,
+        narration: isImportantMemory ? '' : draftNarration,
         imageUrl: nextImageUrl,
         imagePath: nextImagePath,
+        voiceNoteUrl: isImportantMemory ? nextVoiceNoteUrl : '',
+        voiceNotePath: isImportantMemory ? nextVoiceNotePath : '',
       };
 
       if (editingMemory) {
@@ -308,6 +616,14 @@ export default function MemoriesScreen() {
         ) {
           await deleteStorageFile(editingMemory.imagePath);
         }
+
+        if (
+          hasNewLocalVoiceNote &&
+          editingMemory.voiceNotePath &&
+          editingMemory.voiceNotePath !== nextVoiceNotePath
+        ) {
+          await deleteStorageFile(editingMemory.voiceNotePath);
+        }
       } else {
         await savePatientMemory(patientId, userId, payload);
       }
@@ -318,7 +634,7 @@ export default function MemoriesScreen() {
           ? 'Memory updated in the shared album.'
           : 'Memory added to the shared album.'
       );
-      handleCloseComposer();
+      await handleCloseComposer();
     } catch (error) {
       setStatusTone('error');
       setStatusMessage(formatFirebaseError(error, 'Could not save this memory.'));
@@ -355,6 +671,10 @@ export default function MemoriesScreen() {
                 if (selectedMemory.imagePath) {
                   await deleteStorageFile(selectedMemory.imagePath);
                 }
+
+                 if (selectedMemory.voiceNotePath) {
+                   await deleteStorageFile(selectedMemory.voiceNotePath);
+                 }
 
                 setStatusTone('success');
                 setStatusMessage('Memory deleted from the shared album.');
@@ -398,30 +718,53 @@ export default function MemoriesScreen() {
       <StatusBar style="dark" />
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        
-        {/* Soft Hero Section */}
         <View style={styles.heroPanel}>
-          <View style={styles.heroRow}>
-            <View style={styles.heroIconCircle}>
-              <MaterialCommunityIcons name="image-multiple" size={28} color={COLORS.pink} />
-            </View>
-          </View>
-          
           <Text style={styles.heroTitle}>Memories</Text>
-          <Text style={styles.heroSubtitle}>
-            {patientRecord?.patientName
-              ? `${patientRecord.patientName}'s familiar photos and read-aloud moments.`
-              : 'A shared album for familiar faces, relationships, and stories.'}
-          </Text>
+
+          <View style={styles.categoryTabs}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                void stopAudioPlayback();
+                setActiveCategory('general');
+              }}
+              style={[
+                styles.categoryTab,
+                activeCategory === 'general' && styles.categoryTabActive,
+              ]}>
+              <Text
+                style={[
+                  styles.categoryTabText,
+                  activeCategory === 'general' && styles.categoryTabTextActive,
+                ]}>
+                Photos
+              </Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                Speech.stop();
+                setIsSpeaking(false);
+                setSelectedMemory(null);
+                setActiveCategory('important');
+              }}
+              style={[
+                styles.categoryTab,
+                activeCategory === 'important' && styles.categoryTabActive,
+              ]}>
+              <Text
+                style={[
+                  styles.categoryTabText,
+                  activeCategory === 'important' && styles.categoryTabTextActive,
+                ]}>
+                Important People
+              </Text>
+            </Pressable>
+          </View>
 
           <View style={styles.chipRow}>
-            <View style={styles.pillChip}>
-              <Text style={styles.chipText}>Photos</Text>
-            </View>
-            <View style={[styles.pillChip, { backgroundColor: COLORS.pinkSoft }]}>
-              <Text style={[styles.chipText, { color: COLORS.pink }]}>
-                {isCaregiver ? 'Caregiver can add' : 'Tap to hear read aloud'}
-              </Text>
+            <View style={[styles.pillChip, styles.sectionHintChip]}>
+              <Text style={[styles.chipText, styles.sectionHintText]}>{sectionHint}</Text>
             </View>
           </View>
         </View>
@@ -439,61 +782,80 @@ export default function MemoriesScreen() {
           </View>
         )}
 
-        {/* Grid or Empty State */}
         {isPatientLoading || isMemoriesLoading || isProfileLoading ? (
           <View style={styles.emptyCard}>
             <ActivityIndicator color={COLORS.pink} size="large" />
             <Text style={styles.emptyText}>Loading shared memories...</Text>
           </View>
-        ) : memories.length ? (
+        ) : filteredMemories.length ? (
           <View style={[styles.grid, { gap: tileGap }]}>
-            {memories.map((memory) => (
-              <Pressable
-                accessibilityRole="button"
-                key={memory.id}
-                onPress={() => setSelectedMemory(memory)}
-                style={[styles.tile, { width: tileWidth }]}>
-                <View style={styles.tileImageWrap}>
-                  {memory.imageUrl ? (
-                    <Image contentFit="cover" source={{ uri: memory.imageUrl }} style={{ width: '100%', height: tileHeight }} />
-                  ) : (
-                    <View style={[styles.tilePlaceholder, { height: tileHeight }]}>
-                      <MaterialCommunityIcons color={COLORS.pink} name="image-outline" size={32} />
+            {filteredMemories.map((memory) => {
+              const isImportantTile = String(memory.category ?? 'general').trim() === 'important';
+              const isPlayingAudio = activeVoicePlaybackKey === memory.id;
+
+              return (
+                <Pressable
+                  accessibilityRole="button"
+                  key={memory.id}
+                  onPress={() => {
+                    if (isImportantTile) {
+                      void handlePlayAudio(memory.voiceNoteUrl?.trim() ?? '', memory.id);
+                      return;
+                    }
+                    setSelectedMemory(memory);
+                  }}
+                  style={[styles.tile, styles.memoryTile, { width: tileWidth }]}>
+                  <View style={styles.tileImageWrap}>
+                    {memory.imageUrl ? (
+                      <Image contentFit="cover" source={{ uri: memory.imageUrl }} style={{ width: '100%', height: tileHeight }} />
+                    ) : (
+                      <View style={[styles.tilePlaceholder, { height: tileHeight }]}>
+                        <MaterialCommunityIcons color={COLORS.pink} name="image-outline" size={32} />
+                      </View>
+                    )}
+
+                    {isCaregiver ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={(event) => {
+                          event.stopPropagation?.();
+                          void handleStartEditingMemory(memory);
+                        }}
+                        style={styles.tileEditButton}>
+                        <MaterialCommunityIcons color={COLORS.blue} name="pencil-outline" size={18} />
+                      </Pressable>
+                    ) : null}
+
+                    {isImportantTile ? (
+                      <View style={[styles.importantOverlay, isPlayingAudio && styles.importantOverlayActive]}>
+                        <MaterialCommunityIcons
+                          color={COLORS.white}
+                          name={isPlayingAudio ? 'stop-circle' : 'play-circle'}
+                          size={28}
+                        />
+                      </View>
+                    ) : null}
+                  </View>
+
+                  {isImportantTile ? null : (
+                    <View style={styles.tileTextWrap}>
+                      <Text numberOfLines={1} style={styles.tileTitle}>
+                        {memory.title || 'Untitled memory'}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.tileMeta}>
+                        {memory.relationship?.trim() || formatMemoryDate(memory.createdAtMs)}
+                      </Text>
+                      {isCaregiver ? (
+                        <Text style={styles.tileActionHint}>Tap pencil to edit</Text>
+                      ) : null}
                     </View>
                   )}
-
-                  {isCaregiver ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={(event) => {
-                        event.stopPropagation?.();
-                        handleStartEditingMemory(memory);
-                      }}
-                      style={styles.tileEditButton}>
-                      <MaterialCommunityIcons color={COLORS.blue} name="pencil-outline" size={18} />
-                    </Pressable>
-                  ) : null}
-                </View>
-                
-                <View style={styles.tileTextWrap}>
-                  <Text numberOfLines={1} style={styles.tileTitle}>
-                    {memory.title || 'Untitled memory'}
-                  </Text>
-                  <Text numberOfLines={1} style={styles.tileMeta}>
-                    {memory.relationship?.trim() || formatMemoryDate(memory.createdAtMs)}
-                  </Text>
-                  {isCaregiver ? (
-                    <Text style={styles.tileActionHint}>Tap pencil to edit</Text>
-                  ) : null}
-                </View>
-              </Pressable>
-            ))}
+                </Pressable>
+              );
+            })}
           </View>
         ) : (
           <View style={styles.emptyCard}>
-            <View style={styles.emptyIconCircle}>
-              <MaterialCommunityIcons color={COLORS.pink} name="image-multiple-outline" size={48} />
-            </View>
             <Text style={styles.emptyTitle}>{emptyTitle}</Text>
             <Text style={styles.emptyText}>{emptyText}</Text>
           </View>
@@ -517,12 +879,29 @@ export default function MemoriesScreen() {
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>{isEditingMemory ? 'Edit Memory' : 'Add a Memory'}</Text>
               <Text style={styles.modalSubtitle}>
-                {isEditingMemory
-                  ? 'Update the photo, relationship, and story for this memory.'
-                  : 'Add who is in the photo, their relationship, and what is happening.'}
+                {isImportantMemory
+                  ? 'Important people save a photo with a recorded audio note.'
+                  : isEditingMemory
+                    ? 'Update the photo, relationship, and story for this memory.'
+                    : 'Add a general memory photo with its story.'}
               </Text>
 
               <View style={styles.modalForm}>
+                <View style={styles.importantSwitchRow}>
+                  <View style={styles.importantSwitchCopy}>
+                    <Text style={styles.importantSwitchTitle}>Mark as Important</Text>
+                    <Text style={styles.importantSwitchText}>
+                      When on, this save becomes photo + audio only.
+                    </Text>
+                  </View>
+                  <Switch
+                    onValueChange={setIsImportantMemory}
+                    thumbColor={COLORS.white}
+                    trackColor={{ false: '#D8DCE4', true: COLORS.pink }}
+                    value={isImportantMemory}
+                  />
+                </View>
+
                 <Pressable
                   accessibilityRole="button"
                   disabled={isPickingImage}
@@ -540,35 +919,100 @@ export default function MemoriesScreen() {
                   )}
                 </Pressable>
 
-                <TextInput
-                  onChangeText={setMemoryTitle}
-                  placeholder="Who is in the photo?"
-                  placeholderTextColor={COLORS.subtitle}
-                  style={styles.input}
-                  value={memoryTitle}
-                />
-                <TextInput
-                  onChangeText={setMemoryRelationship}
-                  placeholder="Their relationship to patient"
-                  placeholderTextColor={COLORS.subtitle}
-                  style={styles.input}
-                  value={memoryRelationship}
-                />
-                <TextInput
-                  multiline
-                  numberOfLines={4}
-                  onChangeText={setMemoryDescription}
-                  placeholder="Describe the memory..."
-                  placeholderTextColor={COLORS.subtitle}
-                  style={styles.textArea}
-                  textAlignVertical="top"
-                  value={memoryDescription}
-                />
+                {isImportantMemory ? (
+                  <View style={styles.audioCard}>
+                    <View style={styles.audioCardHeader}>
+                      <View style={styles.audioCardCopy}>
+                        <Text style={styles.audioCardTitle}>Recorded Audio</Text>
+                        <Text style={styles.audioCardText}>
+                          Tap record and save a short caregiver audio note for this photo.
+                        </Text>
+                      </View>
+                      <View style={styles.audioStatusPill}>
+                        <Text style={styles.audioStatusText}>
+                          {isRecordingVoiceNote
+                            ? formatDuration(recordingDurationMs)
+                            : selectedVoiceNoteUri
+                              ? 'Ready'
+                              : 'No audio'}
+                        </Text>
+                      </View>
+                    </View>
 
-                <View style={styles.previewCard}>
-                  <Text style={styles.previewLabel}>Narration Preview</Text>
-                  <Text style={styles.previewText}>{draftNarration}</Text>
-                </View>
+                    <View style={styles.audioActionRow}>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => void handleToggleRecording()}
+                        style={[
+                          styles.audioPrimaryButton,
+                          isRecordingVoiceNote && styles.audioPrimaryButtonDanger,
+                        ]}>
+                        <MaterialCommunityIcons
+                          color={COLORS.white}
+                          name={isRecordingVoiceNote ? 'stop' : 'microphone'}
+                          size={20}
+                        />
+                        <Text style={styles.audioPrimaryButtonText}>
+                          {isRecordingVoiceNote ? 'Stop' : 'Record'}
+                        </Text>
+                      </Pressable>
+
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={!selectedVoiceNoteUri}
+                        onPress={() => void handlePlayAudio(selectedVoiceNoteUri, MEMORY_AUDIO_PREVIEW_KEY)}
+                        style={[
+                          styles.audioSecondaryButton,
+                          !selectedVoiceNoteUri && styles.audioSecondaryButtonDisabled,
+                        ]}>
+                        <MaterialCommunityIcons
+                          color={COLORS.blue}
+                          name={
+                            activeVoicePlaybackKey === MEMORY_AUDIO_PREVIEW_KEY
+                              ? 'stop-circle-outline'
+                              : 'play-circle-outline'
+                          }
+                          size={20}
+                        />
+                        <Text style={styles.audioSecondaryButtonText}>
+                          {activeVoicePlaybackKey === MEMORY_AUDIO_PREVIEW_KEY ? 'Stop' : 'Play'}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : (
+                  <>
+                    <TextInput
+                      onChangeText={setMemoryTitle}
+                      placeholder="Who is in the photo?"
+                      placeholderTextColor={COLORS.subtitle}
+                      style={styles.input}
+                      value={memoryTitle}
+                    />
+                    <TextInput
+                      onChangeText={setMemoryRelationship}
+                      placeholder="Their relationship to patient"
+                      placeholderTextColor={COLORS.subtitle}
+                      style={styles.input}
+                      value={memoryRelationship}
+                    />
+                    <TextInput
+                      multiline
+                      numberOfLines={4}
+                      onChangeText={setMemoryDescription}
+                      placeholder="Describe the memory..."
+                      placeholderTextColor={COLORS.subtitle}
+                      style={styles.textArea}
+                      textAlignVertical="top"
+                      value={memoryDescription}
+                    />
+
+                    <View style={styles.previewCard}>
+                      <Text style={styles.previewLabel}>Narration Preview</Text>
+                      <Text style={styles.previewText}>{draftNarration}</Text>
+                    </View>
+                  </>
+                )}
               </View>
 
               <View style={styles.modalActions}>
@@ -719,6 +1163,34 @@ const styles = StyleSheet.create({
     gap: 10,
     marginTop: 16,
   },
+  categoryTabs: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 18,
+  },
+  categoryTab: {
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    backgroundColor: COLORS.chip,
+  },
+  categoryTabActive: {
+    backgroundColor: COLORS.pink,
+  },
+  categoryTabText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.subtitle,
+  },
+  categoryTabTextActive: {
+    color: COLORS.white,
+  },
+  sectionHintChip: {
+    backgroundColor: COLORS.pinkSoft,
+  },
+  sectionHintText: {
+    color: COLORS.pink,
+  },
   pillChip: {
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -752,26 +1224,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   emptyCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 32,
-    minHeight: 280,
+    minHeight: 240,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 32,
-    gap: 16,
-    shadowColor: COLORS.title,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.04,
-    shadowRadius: 24,
-    elevation: 3,
-  },
-  emptyIconCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: COLORS.pinkSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingVertical: 24,
+    paddingHorizontal: 8,
+    gap: 10,
   },
   emptyTitle: {
     fontSize: 24,
@@ -802,6 +1260,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 24,
     elevation: 3,
+  },
+  memoryTile: {
+    backgroundColor: COLORS.white,
   },
   tileImageWrap: {
     position: 'relative',
@@ -846,6 +1307,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.blue,
     marginTop: 2,
+  },
+  importantOverlay: {
+    position: 'absolute',
+    right: 12,
+    bottom: 12,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: 'rgba(26, 26, 46, 0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  importantOverlayActive: {
+    backgroundColor: COLORS.pink,
   },
 
   // Floating Action Button
@@ -906,6 +1381,30 @@ const styles = StyleSheet.create({
     gap: 16,
     marginBottom: 24,
   },
+  importantSwitchRow: {
+    minHeight: 66,
+    borderRadius: 20,
+    backgroundColor: COLORS.chip,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+  },
+  importantSwitchCopy: {
+    flex: 1,
+  },
+  importantSwitchTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.title,
+  },
+  importantSwitchText: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
+    color: COLORS.subtitle,
+  },
   imagePicker: {
     borderRadius: 24,
     minHeight: 200,
@@ -963,6 +1462,85 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     color: COLORS.title,
+  },
+  audioCard: {
+    borderRadius: 20,
+    backgroundColor: COLORS.blueSoft,
+    padding: 16,
+    gap: 14,
+  },
+  audioCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  audioCardCopy: {
+    flex: 1,
+  },
+  audioCardTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.title,
+  },
+  audioCardText: {
+    marginTop: 4,
+    fontSize: 13,
+    lineHeight: 18,
+    color: COLORS.subtitle,
+  },
+  audioStatusPill: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    backgroundColor: COLORS.white,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  audioStatusText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.title,
+  },
+  audioActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  audioPrimaryButton: {
+    flex: 1,
+    minHeight: 52,
+    borderRadius: 999,
+    backgroundColor: COLORS.pink,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  audioPrimaryButtonDanger: {
+    backgroundColor: COLORS.danger,
+  },
+  audioPrimaryButtonText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.white,
+  },
+  audioSecondaryButton: {
+    minHeight: 52,
+    borderRadius: 999,
+    backgroundColor: COLORS.white,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  audioSecondaryButtonDisabled: {
+    opacity: 0.45,
+  },
+  audioSecondaryButtonText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: COLORS.blue,
   },
   modalActions: {
     flexDirection: 'row',
